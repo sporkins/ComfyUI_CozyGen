@@ -88,6 +88,20 @@ const choiceTypeMapping = {
   // Add more mappings as needed
 };
 
+const WANVIDEO_BASE_PRECISIONS = ["fp32", "bf16", "fp16", "fp16_fast"];
+const WANVIDEO_QUANTIZATIONS = [
+  "disabled",
+  "fp8_e4m3fn",
+  "fp8_e4m3fn_fast",
+  "fp8_e4m3fn_scaled",
+  "fp8_e4m3fn_scaled_fast",
+  "fp8_e5m2",
+  "fp8_e5m2_fast",
+  "fp8_e5m2_scaled",
+  "fp8_e5m2_scaled_fast",
+];
+const WANVIDEO_LOAD_DEVICES = ["main_device", "offload_device"];
+
 function App() {
   const [workflows, setWorkflows] = useState([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState(
@@ -218,6 +232,7 @@ function App() {
             'CozyGenChoiceInput',
             'CozyGenLoraInput',
             'CozyGenLoraInputMulti',
+            'CozyGenWanVideoModelSelector',
             'CozyGenBoolInput'
         ];
 
@@ -239,8 +254,9 @@ function App() {
             const isDynamicDropdown = input.class_type === 'CozyGenDynamicInput' && input.inputs['param_type'] === 'DROPDOWN';
             const isChoiceNode = input.class_type === 'CozyGenChoiceInput';
             const isLoraNode = ["CozyGenLoraInput", "CozyGenLoraInputMulti"].includes(input.class_type);
+            const isWanVideoModelNode = input.class_type === 'CozyGenWanVideoModelSelector';
 
-            if (isDynamicDropdown || isChoiceNode || isLoraNode) {
+            if (isDynamicDropdown || isChoiceNode || isLoraNode || isWanVideoModelNode) {
                 const param_name = input.inputs['param_name'];
                 let choiceType = input.inputs['choice_type'] || (input.properties && input.properties['choice_type']);
                 
@@ -250,7 +266,25 @@ function App() {
                     choiceType = choiceTypeMapping[param_name];
                 }
 
-                if (choiceType) {
+                if (isWanVideoModelNode) {
+                    try {
+                        const choicesData = await getChoices("wanvideo_models");
+                        input.inputs.choices = {
+                            modelNames: choicesData.choices || [],
+                            basePrecisions: WANVIDEO_BASE_PRECISIONS,
+                            quantizations: WANVIDEO_QUANTIZATIONS,
+                            loadDevices: WANVIDEO_LOAD_DEVICES,
+                        };
+                    } catch (error) {
+                        console.error(`Error fetching WanVideo models:`, error);
+                        input.inputs.choices = {
+                            modelNames: [],
+                            basePrecisions: WANVIDEO_BASE_PRECISIONS,
+                            quantizations: WANVIDEO_QUANTIZATIONS,
+                            loadDevices: WANVIDEO_LOAD_DEVICES,
+                        };
+                    }
+                } else if (choiceType) {
                     try {
                         const choicesData = await getChoices(choiceType);
                         // For dynamic nodes, we put choices in a hidden field.
@@ -294,6 +328,13 @@ function App() {
                         lora: input.inputs[`lora_${index}`],
                         strength: input.inputs[`strength_${index}`],
                     }));
+                } else if(input.class_type === "CozyGenWanVideoModelSelector") {
+                    defaultValue = {
+                        model_name: input.inputs.model_name || input.inputs.choices?.modelNames?.[0] || 'none',
+                        base_precision: input.inputs.base_precision || WANVIDEO_BASE_PRECISIONS[0],
+                        quantization: input.inputs.quantization || WANVIDEO_QUANTIZATIONS[0],
+                        load_device: input.inputs.load_device || WANVIDEO_LOAD_DEVICES[1],
+                    };
                 } else if (input.class_type === 'CozyGenImageInput') {
                     defaultValue = input.inputs.image;
                 } else if(input.class_type === 'CozyGenBoolInput') {
@@ -454,6 +495,12 @@ function App() {
                         nodeToUpdate.inputs[`lora_${index}`] = lora;
                         nodeToUpdate.inputs[`strength_${index}`] = strength;
                     }
+                } else if(dynamicNode.class_type === 'CozyGenWanVideoModelSelector') {
+                    const modelValue = valueToInject || {};
+                    nodeToUpdate.inputs.model_name = modelValue.model_name || 'none';
+                    nodeToUpdate.inputs.base_precision = modelValue.base_precision || 'bf16';
+                    nodeToUpdate.inputs.quantization = modelValue.quantization || 'disabled';
+                    nodeToUpdate.inputs.load_device = modelValue.load_device || 'offload_device';
                 } else if(dynamicNode.class_type === 'CozyGenBoolInput') {
                     nodeToUpdate.inputs.value = valueToInject;
                 }
@@ -570,13 +617,16 @@ function App() {
                         .filter(input => input.class_type !== 'CozyGenImageInput')
                         .map(input => {
                             // Map new static node properties to the format DynamicForm expects
-                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenBoolInput'].includes(input.class_type)) {
+                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenWanVideoModelSelector', 'CozyGenBoolInput'].includes(input.class_type)) {
                                 let param_type = input.class_type.replace('CozyGen', '').replace('Input', '').toUpperCase();
                                 if (param_type === 'CHOICE') {
                                     param_type = 'DROPDOWN'; // Map Choice to Dropdown
                                 }
                                 if (param_type === 'LORAMULTI') {
                                     param_type = 'LORA_MULTI';
+                                }
+                                if (input.class_type === 'CozyGenWanVideoModelSelector') {
+                                    param_type = 'WANVIDEO_MODEL';
                                 }
                                 return {
                                     ...input,
