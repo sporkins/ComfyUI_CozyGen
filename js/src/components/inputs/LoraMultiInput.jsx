@@ -25,6 +25,9 @@ const LoraMultiInput = ({ value, onChange, choices }) => {
           />
         </div>
       ))}
+      <p className="text-xs text-gray-400">
+        Outputs LoRA filenames and strengths only (no loading here).
+      </p>
     </div>
   );
 };

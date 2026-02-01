@@ -256,7 +256,9 @@ function App() {
                         // For dynamic nodes, we put choices in a hidden field.
                         // For the new choice node, the JS will handle it, but we can preload here.
                         input.inputs.choices = choicesData.choices || [];
-                        if(isLoraNode) input.inputs.choices.unshift("None");
+                        if(isLoraNode && !input.inputs.choices.includes("None")) {
+                            input.inputs.choices.unshift("None");
+                        }
                     } catch (error) {
                         console.error(`Error fetching choices for ${param_name} (choiceType: ${choiceType}):`, error);
                         input.inputs.choices = [];
@@ -432,10 +434,11 @@ function App() {
                 } else if (dynamicNode.class_type === 'CozyGenChoiceInput') {
                     nodeToUpdate.inputs.value = valueToInject;
                 } else if(dynamicNode.class_type === 'CozyGenLoraInput') {
-                    const { lora, strength }  = valueToInject;
+                    const lora = valueToInject?.lora ?? "None";
+                    const strength = valueToInject?.strength ?? 0;
                     if(lora !== "None" && strength !== 0) {
                         
-                        metaTextLines.push(`${dynamicNode.inputs.param_name} = ${lora}:${strength.toFixed(2)}`)
+                        metaTextLines.push(`${dynamicNode.inputs.param_name} = ${lora}:${Number(strength).toFixed(2)}`)
                     }
                     nodeToUpdate.inputs.strength_value = strength;
                     nodeToUpdate.inputs.lora_value = lora;
