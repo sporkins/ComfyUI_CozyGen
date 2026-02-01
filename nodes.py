@@ -375,38 +375,33 @@ class CozyGenLoraInput:
             if f.endswith((".safetensors", ".pt", ".ckpt")) and not f.startswith("hidden/")
         ]
         return ["None"] + sorted(lora_files)
-    
+
     @classmethod
     def INPUT_TYPES(cls):
-
         return {
             "required": {
                 "param_name": (IO.STRING, {"default": "Lora Selector"}),
                 "priority": (IO.INT, {"default": 10}),
                 "lora_value": (CozyGenLoraInput.get_choices(), {
                     "default": "None",
-                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
+                    "tooltip": "Select LoRA — output is STRING; connect to WanVideo lora_N (combo). Restart ComfyUI if wire won't light up.",
                 }),
                 "strength_value": (IO.FLOAT, {
-                    "default": 1.0,
-                    "min": -5.0,
-                    "max": 5.0,
-                    "step": 0.05,
+                    "default": 1.0, "min": -5.0, "max": 5.0, "step": 0.05,
                     "tooltip": "LoRA strength.",
                 }),
             },
         }
 
-    
-    RETURN_TYPES = (node_typing.COMBO, IO.FLOAT)
+    RETURN_TYPES = (IO.ANY, IO.FLOAT)
     RETURN_NAMES = ("lora", "strength")
     FUNCTION = "get_value"
     CATEGORY = "CozyGen"
-    DESCRIPTION = "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N."
+    DESCRIPTION = "Select LoRA name → STRING output connects to WanVideoLoraSelectMulti lora_N slots."
 
     def get_value(self, param_name, priority, lora_value, strength_value):
-        if lora_value not in CozyGenLoraInput.get_choices() or lora_value == "None" or strength_value == 0:
-            return ("none", 0.0)
+        if lora_value not in CozyGenLoraInput.get_choices() or lora_value == "None":
+            return ("none", 0.0)  # lowercase "none" matches WanVideo default
         return (lora_value, float(strength_value))
 
 class CozyGenLoraInputMulti:
@@ -485,63 +480,31 @@ class CozyGenLoraInputMulti:
         }
 
     RETURN_TYPES = (
-        node_typing.COMBO,
-        IO.FLOAT,
-        node_typing.COMBO,
-        IO.FLOAT,
-        node_typing.COMBO,
-        IO.FLOAT,
-        node_typing.COMBO,
-        IO.FLOAT,
-        node_typing.COMBO,
-        IO.FLOAT,
+        IO.ANY, IO.FLOAT,
+        IO.ANY, IO.FLOAT,
+        IO.ANY, IO.FLOAT,
+        IO.ANY, IO.FLOAT,
+        IO.ANY, IO.FLOAT,
     )
     RETURN_NAMES = (
-        "lora_0",
-        "strength_0",
-        "lora_1",
-        "strength_1",
-        "lora_2",
-        "strength_2",
-        "lora_3",
-        "strength_3",
-        "lora_4",
-        "strength_4",
+        "lora_0", "strength_0", "lora_1", "strength_1",
+        "lora_2", "strength_2", "lora_3", "strength_3",
+        "lora_4", "strength_4",
     )
     FUNCTION = "get_value"
     CATEGORY = "CozyGen"
-    DESCRIPTION = "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N."
+    DESCRIPTION = "Select LoRAs → STRING outputs connect directly to WanVideo lora_N slots."
 
-    def get_value(
-        self,
-        param_name,
-        priority,
-        lora_0,
-        strength_0,
-        lora_1,
-        strength_1,
-        lora_2,
-        strength_2,
-        lora_3,
-        strength_3,
-        lora_4,
-        strength_4,
-    ):
-        lora_inputs = [
-            (lora_0, strength_0),
-            (lora_1, strength_1),
-            (lora_2, strength_2),
-            (lora_3, strength_3),
-            (lora_4, strength_4),
-        ]
-        output_values = []
-        valid_choices = CozyGenLoraInputMulti.get_choices()
-        for lora_name, strength in lora_inputs:
-            if lora_name not in valid_choices or lora_name == "None" or strength == 0:
-                output_values.extend(["none", 0.0])
-                continue
-            output_values.extend([lora_name, float(strength)])
-        return tuple(output_values)
+    def get_value(self, param_name, priority, lora_0, strength_0, lora_1, strength_1, lora_2, strength_2, lora_3, strength_3, lora_4, strength_4):
+        lora_inputs = [(lora_0, strength_0), (lora_1, strength_1), (lora_2, strength_2), (lora_3, strength_3), (lora_4, strength_4)]
+        output = []
+        valid = CozyGenLoraInputMulti.get_choices()
+        for name, stren in lora_inputs:
+            if name not in valid or name == "None" or stren == 0:
+                output.extend(["none", 0.0])
+            else:
+                output.extend([name, float(stren)])
+        return tuple(output)
 
 class CozyGenMetaText(ComfyNodeABC):
     _NODE_CLASS_NAME = "CozyGenMetaText"
