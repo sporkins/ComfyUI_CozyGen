@@ -13,8 +13,6 @@ import server # Import server
 import asyncio # Import Import asyncio
 from comfy.comfy_types import node_typing, ComfyNodeABC, InputTypeDict
 from comfy.comfy_types.node_typing import IO
-import comfy.utils
-import comfy.sd
 
 
 
@@ -370,53 +368,143 @@ class CozyGenChoiceInput:
 class CozyGenLoraInput:
     _NODE_CLASS_NAME = "CozyGenLoraInput"
     
-    def __init__(self):
-        self.loaded_lora = None
-    
     @classmethod
     def get_choices(cls):
-        return ["None"] + sorted([x for x in folder_paths.get_filename_list("loras") if not x.startswith("hidden/")])
-    
+        lora_files = [
+            f for f in folder_paths.get_filename_list("loras")
+            if f.endswith((".safetensors", ".pt", ".ckpt")) and not f.startswith("hidden/")
+        ]
+        return ["None"] + sorted(lora_files)
+
     @classmethod
     def INPUT_TYPES(cls):
-
         return {
             "required": {
-                "model": (IO.MODEL,),
                 "param_name": (IO.STRING, {"default": "Lora Selector"}),
                 "priority": (IO.INT, {"default": 10}),
-                "lora_value": (CozyGenLoraInput.get_choices(), { "default": "None" }),
-                "strength_value": (IO.FLOAT, { "default": 1.0, "min": -5.0, "max": 5.0, "step": 0.05 })
+                "lora_value": (CozyGenLoraInput.get_choices(), {
+                    "default": "None",
+                    "tooltip": "Select LoRA — output is STRING; connect to WanVideo lora_N (combo). Restart ComfyUI if wire won't light up.",
+                }),
+                "strength_value": (IO.FLOAT, {
+                    "default": 1.0, "min": -5.0, "max": 5.0, "step": 0.05,
+                    "tooltip": "LoRA strength.",
+                }),
             },
         }
 
-    
-    RETURN_TYPES = (IO.MODEL,)
+    RETURN_TYPES = (IO.ANY, IO.FLOAT)
+    RETURN_NAMES = ("lora", "strength")
     FUNCTION = "get_value"
-    CATEGORY = "CozyGen/Static"
-    
-    def load_lora(self, model, lora_name, strength):
-        lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
-        lora = None
-        if self.loaded_lora is not None:
-            if self.loaded_lora[0] == lora_path:
-                lora = self.loaded_lora[1]
+    CATEGORY = "CozyGen"
+    DESCRIPTION = "Select LoRA name → STRING output connects to WanVideoLoraSelectMulti lora_N slots."
+
+    def get_value(self, param_name, priority, lora_value, strength_value):
+        if lora_value not in CozyGenLoraInput.get_choices() or lora_value == "None":
+            return ("none", 0.0)  # lowercase "none" matches WanVideo default
+        return (lora_value, float(strength_value))
+
+class CozyGenLoraInputMulti:
+    _NODE_CLASS_NAME = "CozyGenLoraInputMulti"
+
+    @classmethod
+    def get_choices(cls):
+        lora_files = [
+            f for f in folder_paths.get_filename_list("loras")
+            if f.endswith((".safetensors", ".pt", ".ckpt")) and not f.startswith("hidden/")
+        ]
+        return ["None"] + sorted(lora_files)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "Lora Selector (Multi)"}),
+                "priority": (IO.INT, {"default": 10}),
+                "lora_0": (CozyGenLoraInputMulti.get_choices(), {
+                    "default": "None",
+                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
+                }),
+                "strength_0": (IO.FLOAT, {
+                    "default": 1.0,
+                    "min": -5.0,
+                    "max": 5.0,
+                    "step": 0.05,
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                }),
+                "lora_1": (CozyGenLoraInputMulti.get_choices(), {
+                    "default": "None",
+                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
+                }),
+                "strength_1": (IO.FLOAT, {
+                    "default": 1.0,
+                    "min": -5.0,
+                    "max": 5.0,
+                    "step": 0.05,
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                }),
+                "lora_2": (CozyGenLoraInputMulti.get_choices(), {
+                    "default": "None",
+                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
+                }),
+                "strength_2": (IO.FLOAT, {
+                    "default": 1.0,
+                    "min": -5.0,
+                    "max": 5.0,
+                    "step": 0.05,
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                }),
+                "lora_3": (CozyGenLoraInputMulti.get_choices(), {
+                    "default": "None",
+                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
+                }),
+                "strength_3": (IO.FLOAT, {
+                    "default": 1.0,
+                    "min": -5.0,
+                    "max": 5.0,
+                    "step": 0.05,
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                }),
+                "lora_4": (CozyGenLoraInputMulti.get_choices(), {
+                    "default": "None",
+                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
+                }),
+                "strength_4": (IO.FLOAT, {
+                    "default": 1.0,
+                    "min": -5.0,
+                    "max": 5.0,
+                    "step": 0.05,
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                }),
+            },
+        }
+
+    RETURN_TYPES = (
+        IO.ANY, IO.FLOAT,
+        IO.ANY, IO.FLOAT,
+        IO.ANY, IO.FLOAT,
+        IO.ANY, IO.FLOAT,
+        IO.ANY, IO.FLOAT,
+    )
+    RETURN_NAMES = (
+        "lora_0", "strength_0", "lora_1", "strength_1",
+        "lora_2", "strength_2", "lora_3", "strength_3",
+        "lora_4", "strength_4",
+    )
+    FUNCTION = "get_value"
+    CATEGORY = "CozyGen"
+    DESCRIPTION = "Select LoRAs → STRING outputs connect directly to WanVideo lora_N slots."
+
+    def get_value(self, param_name, priority, lora_0, strength_0, lora_1, strength_1, lora_2, strength_2, lora_3, strength_3, lora_4, strength_4):
+        lora_inputs = [(lora_0, strength_0), (lora_1, strength_1), (lora_2, strength_2), (lora_3, strength_3), (lora_4, strength_4)]
+        output = []
+        valid = CozyGenLoraInputMulti.get_choices()
+        for name, stren in lora_inputs:
+            if name not in valid or name == "None" or stren == 0:
+                output.extend(["none", 0.0])
             else:
-                self.loaded_lora = None
-
-        if lora is None:
-            lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
-            self.loaded_lora = (lora_path, lora)
-
-        model_lora, _ = comfy.sd.load_lora_for_models(model, None, lora, strength, 0)
-        # print("Loaded Lora", lora_path, strength)
-        return (model_lora,)
-
-    def get_value(self, model, param_name, priority, lora_value, strength_value):
-        if lora_value not in CozyGenLoraInput.get_choices() or lora_value == "None" or strength_value == 0:
-            return (model,)
-        
-        return self.load_lora(model, lora_value, strength_value)
+                output.extend([name, float(stren)])
+        return tuple(output)
 
 class CozyGenMetaText(ComfyNodeABC):
     _NODE_CLASS_NAME = "CozyGenMetaText"
@@ -447,6 +535,7 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenStringInput": CozyGenStringInput,
     "CozyGenChoiceInput": CozyGenChoiceInput,
     "CozyGenLoraInput": CozyGenLoraInput,
+    "CozyGenLoraInputMulti": CozyGenLoraInputMulti,
     "CozyGenMetaText": CozyGenMetaText,
     "CozyGenBoolInput": CozyGenBoolInput
 }
@@ -461,6 +550,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenStringInput": "CozyGen String Input",
     "CozyGenChoiceInput": "CozyGen Choice Input",
     "CozyGenLoraInput": "CozyGen Lora Input",
+    "CozyGenLoraInputMulti": "CozyGen Lora Input Multi",
     "CozyGenMetaText": "CozyGen Meta Text",
     "CozyGenBoolInput": "CozyGen Bool Input"
 }

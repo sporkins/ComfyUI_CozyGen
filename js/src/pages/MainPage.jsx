@@ -217,6 +217,7 @@ function App() {
             'CozyGenStringInput',
             'CozyGenChoiceInput',
             'CozyGenLoraInput',
+            'CozyGenLoraInputMulti',
             'CozyGenBoolInput'
         ];
 
@@ -237,7 +238,7 @@ function App() {
         const inputsWithChoices = await Promise.all(allInputNodes.map(async (input) => {
             const isDynamicDropdown = input.class_type === 'CozyGenDynamicInput' && input.inputs['param_type'] === 'DROPDOWN';
             const isChoiceNode = input.class_type === 'CozyGenChoiceInput';
-            const isLoraNode = input.class_type === "CozyGenLoraInput";
+            const isLoraNode = ["CozyGenLoraInput", "CozyGenLoraInputMulti"].includes(input.class_type);
 
             if (isDynamicDropdown || isChoiceNode || isLoraNode) {
                 const param_name = input.inputs['param_name'];
@@ -255,7 +256,9 @@ function App() {
                         // For dynamic nodes, we put choices in a hidden field.
                         // For the new choice node, the JS will handle it, but we can preload here.
                         input.inputs.choices = choicesData.choices || [];
-                        if(isLoraNode) input.inputs.choices.unshift("None");
+                        if(isLoraNode && !input.inputs.choices.includes("None")) {
+                            input.inputs.choices.unshift("None");
+                        }
                     } catch (error) {
                         console.error(`Error fetching choices for ${param_name} (choiceType: ${choiceType}):`, error);
                         input.inputs.choices = [];
@@ -286,6 +289,11 @@ function App() {
                     defaultValue = input.inputs.choices && input.inputs.choices.length > 0 ? input.inputs.choices[0] : '';
                 } else if(input.class_type === "CozyGenLoraInput") {
                     defaultValue = { lora: input.inputs.lora_value, strength: input.inputs.strength_value };
+                } else if(input.class_type === "CozyGenLoraInputMulti") {
+                    defaultValue = [0, 1, 2, 3, 4].map((index) => ({
+                        lora: input.inputs[`lora_${index}`],
+                        strength: input.inputs[`strength_${index}`],
+                    }));
                 } else if (input.class_type === 'CozyGenImageInput') {
                     defaultValue = input.inputs.image;
                 } else if(input.class_type === 'CozyGenBoolInput') {
@@ -426,13 +434,26 @@ function App() {
                 } else if (dynamicNode.class_type === 'CozyGenChoiceInput') {
                     nodeToUpdate.inputs.value = valueToInject;
                 } else if(dynamicNode.class_type === 'CozyGenLoraInput') {
-                    const { lora, strength }  = valueToInject;
+                    const lora = valueToInject?.lora ?? "None";
+                    const strength = valueToInject?.strength ?? 0;
                     if(lora !== "None" && strength !== 0) {
                         
-                        metaTextLines.push(`${dynamicNode.inputs.param_name} = ${lora}:${strength.toFixed(2)}`)
+                        metaTextLines.push(`${dynamicNode.inputs.param_name} = ${lora}:${Number(strength).toFixed(2)}`)
                     }
                     nodeToUpdate.inputs.strength_value = strength;
                     nodeToUpdate.inputs.lora_value = lora;
+                } else if(dynamicNode.class_type === 'CozyGenLoraInputMulti') {
+                    const loraValues = Array.isArray(valueToInject) ? valueToInject : [];
+                    for (let index = 0; index < 5; index += 1) {
+                        const loraValue = loraValues[index] || {};
+                        const lora = loraValue.lora ?? "None";
+                        const strength = loraValue.strength ?? 0;
+                        if(lora !== "None" && strength !== 0) {
+                            metaTextLines.push(`${dynamicNode.inputs.param_name} ${index + 1} = ${lora}:${Number(strength).toFixed(2)}`)
+                        }
+                        nodeToUpdate.inputs[`lora_${index}`] = lora;
+                        nodeToUpdate.inputs[`strength_${index}`] = strength;
+                    }
                 } else if(dynamicNode.class_type === 'CozyGenBoolInput') {
                     nodeToUpdate.inputs.value = valueToInject;
                 }
@@ -549,10 +570,13 @@ function App() {
                         .filter(input => input.class_type !== 'CozyGenImageInput')
                         .map(input => {
                             // Map new static node properties to the format DynamicForm expects
-                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenBoolInput'].includes(input.class_type)) {
+                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenBoolInput'].includes(input.class_type)) {
                                 let param_type = input.class_type.replace('CozyGen', '').replace('Input', '').toUpperCase();
                                 if (param_type === 'CHOICE') {
                                     param_type = 'DROPDOWN'; // Map Choice to Dropdown
+                                }
+                                if (param_type === 'LORAMULTI') {
+                                    param_type = 'LORA_MULTI';
                                 }
                                 return {
                                     ...input,
@@ -637,4 +661,3 @@ function App() {
   );
 }
 export default App;
-
