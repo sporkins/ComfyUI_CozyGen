@@ -446,9 +446,9 @@ function App() {
                     const loraValues = Array.isArray(valueToInject) ? valueToInject : [];
                     for (let index = 0; index < 5; index += 1) {
                         const loraValue = loraValues[index] || {};
-                        const lora = loraValue.lora ?? "";
+                        const lora = loraValue.lora ?? "None";
                         const strength = loraValue.strength ?? 0;
-                        if(lora !== "" && strength !== 0) {
+                        if(lora !== "None" && strength !== 0) {
                             metaTextLines.push(`${dynamicNode.inputs.param_name} ${index + 1} = ${lora}:${Number(strength).toFixed(2)}`)
                         }
                         nodeToUpdate.inputs[`lora_${index}`] = lora;

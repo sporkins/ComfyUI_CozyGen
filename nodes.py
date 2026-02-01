@@ -371,15 +371,10 @@ class CozyGenLoraInput:
     @classmethod
     def get_choices(cls):
         lora_files = [
-            x for x in folder_paths.get_filename_list("loras")
-            if not x.startswith("hidden/")
+            f for f in folder_paths.get_filename_list("loras")
+            if f.endswith((".safetensors", ".pt", ".ckpt")) and not f.startswith("hidden/")
         ]
-        preferred_exts = (".safetensors", ".pt", ".ckpt")
-        lora_files = sorted(
-            lora_files,
-            key=lambda name: (0 if name.lower().endswith(preferred_exts) else 1, name.lower()),
-        )
-        return ["None"] + lora_files
+        return ["None"] + sorted(lora_files)
     
     @classmethod
     def INPUT_TYPES(cls):
@@ -390,7 +385,7 @@ class CozyGenLoraInput:
                 "priority": (IO.INT, {"default": 10}),
                 "lora_value": (CozyGenLoraInput.get_choices(), {
                     "default": "None",
-                    "tooltip": "Select LoRA name(s) to connect directly to WanVideoLoraSelectMulti or similar (no loading here).",
+                    "tooltip": "Outputs combo-compatible LoRA filenames — connect directly to WanVideoLoraSelectMulti lora_N slots.",
                 }),
                 "strength_value": (IO.FLOAT, {
                     "default": 1.0,
@@ -407,7 +402,7 @@ class CozyGenLoraInput:
     RETURN_NAMES = ("lora", "strength")
     FUNCTION = "get_value"
     CATEGORY = "CozyGen"
-    DESCRIPTION = "Select a LoRA name and strength (no loading here)."
+    DESCRIPTION = "Outputs combo-compatible LoRA filenames — connect directly to WanVideoLoraSelectMulti lora_N slots."
 
     def get_value(self, param_name, priority, lora_value, strength_value):
         if lora_value not in CozyGenLoraInput.get_choices():
@@ -420,15 +415,10 @@ class CozyGenLoraInputMulti:
     @classmethod
     def get_choices(cls):
         lora_files = [
-            x for x in folder_paths.get_filename_list("loras")
-            if not x.startswith("hidden/")
+            f for f in folder_paths.get_filename_list("loras")
+            if f.endswith((".safetensors", ".pt", ".ckpt")) and not f.startswith("hidden/")
         ]
-        preferred_exts = (".safetensors", ".pt", ".ckpt")
-        lora_files = sorted(
-            lora_files,
-            key=lambda name: (0 if name.lower().endswith(preferred_exts) else 1, name.lower()),
-        )
-        return ["None"] + lora_files
+        return ["None"] + sorted(lora_files)
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -438,7 +428,7 @@ class CozyGenLoraInputMulti:
                 "priority": (IO.INT, {"default": 10}),
                 "lora_0": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                    "tooltip": "Outputs combo-compatible LoRA filenames — connect directly to WanVideoLoraSelectMulti lora_N slots.",
                 }),
                 "strength_0": (IO.FLOAT, {
                     "default": 1.0,
@@ -449,7 +439,7 @@ class CozyGenLoraInputMulti:
                 }),
                 "lora_1": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                    "tooltip": "Outputs combo-compatible LoRA filenames — connect directly to WanVideoLoraSelectMulti lora_N slots.",
                 }),
                 "strength_1": (IO.FLOAT, {
                     "default": 1.0,
@@ -460,7 +450,7 @@ class CozyGenLoraInputMulti:
                 }),
                 "lora_2": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                    "tooltip": "Outputs combo-compatible LoRA filenames — connect directly to WanVideoLoraSelectMulti lora_N slots.",
                 }),
                 "strength_2": (IO.FLOAT, {
                     "default": 1.0,
@@ -471,7 +461,7 @@ class CozyGenLoraInputMulti:
                 }),
                 "lora_3": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                    "tooltip": "Outputs combo-compatible LoRA filenames — connect directly to WanVideoLoraSelectMulti lora_N slots.",
                 }),
                 "strength_3": (IO.FLOAT, {
                     "default": 1.0,
@@ -482,7 +472,7 @@ class CozyGenLoraInputMulti:
                 }),
                 "lora_4": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
+                    "tooltip": "Outputs combo-compatible LoRA filenames — connect directly to WanVideoLoraSelectMulti lora_N slots.",
                 }),
                 "strength_4": (IO.FLOAT, {
                     "default": 1.0,
@@ -520,7 +510,7 @@ class CozyGenLoraInputMulti:
     )
     FUNCTION = "get_value"
     CATEGORY = "CozyGen"
-    DESCRIPTION = "Select multiple LoRA names and strengths (no loading here)."
+    DESCRIPTION = "Outputs combo-compatible LoRA filenames — connect directly to WanVideoLoraSelectMulti lora_N slots."
 
     def get_value(
         self,
@@ -548,7 +538,7 @@ class CozyGenLoraInputMulti:
         valid_choices = CozyGenLoraInputMulti.get_choices()
         for lora_name, strength in lora_inputs:
             if lora_name not in valid_choices or lora_name == "None" or strength == 0:
-                output_values.extend(["", 0.0])
+                output_values.extend(["None", 0.0])
                 continue
             output_values.extend([lora_name, float(strength)])
         return tuple(output_values)
