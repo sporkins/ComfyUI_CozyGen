@@ -438,64 +438,86 @@ class CozyGenLoraInputMulti:
                 "priority": (IO.INT, {"default": 10}),
                 "lora_0": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Select LoRA name(s) to connect directly to WanVideoLoraSelectMulti or similar (no loading here).",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "strength_0": (IO.FLOAT, {
                     "default": 1.0,
                     "min": -5.0,
                     "max": 5.0,
                     "step": 0.05,
-                    "tooltip": "LoRA strength.",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "lora_1": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Select LoRA name(s) to connect directly to WanVideoLoraSelectMulti or similar (no loading here).",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "strength_1": (IO.FLOAT, {
                     "default": 1.0,
                     "min": -5.0,
                     "max": 5.0,
                     "step": 0.05,
-                    "tooltip": "LoRA strength.",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "lora_2": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Select LoRA name(s) to connect directly to WanVideoLoraSelectMulti or similar (no loading here).",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "strength_2": (IO.FLOAT, {
                     "default": 1.0,
                     "min": -5.0,
                     "max": 5.0,
                     "step": 0.05,
-                    "tooltip": "LoRA strength.",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "lora_3": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Select LoRA name(s) to connect directly to WanVideoLoraSelectMulti or similar (no loading here).",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "strength_3": (IO.FLOAT, {
                     "default": 1.0,
                     "min": -5.0,
                     "max": 5.0,
                     "step": 0.05,
-                    "tooltip": "LoRA strength.",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "lora_4": (CozyGenLoraInputMulti.get_choices(), {
                     "default": "None",
-                    "tooltip": "Select LoRA name(s) to connect directly to WanVideoLoraSelectMulti or similar (no loading here).",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
                 "strength_4": (IO.FLOAT, {
                     "default": 1.0,
                     "min": -5.0,
                     "max": 5.0,
                     "step": 0.05,
-                    "tooltip": "LoRA strength.",
+                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
                 }),
             },
         }
 
-    RETURN_TYPES = ("LIST",)
-    RETURN_NAMES = ("lora_configs",)
+    RETURN_TYPES = (
+        IO.STRING,
+        IO.FLOAT,
+        IO.STRING,
+        IO.FLOAT,
+        IO.STRING,
+        IO.FLOAT,
+        IO.STRING,
+        IO.FLOAT,
+        IO.STRING,
+        IO.FLOAT,
+    )
+    RETURN_NAMES = (
+        "lora_0",
+        "strength_0",
+        "lora_1",
+        "strength_1",
+        "lora_2",
+        "strength_2",
+        "lora_3",
+        "strength_3",
+        "lora_4",
+        "strength_4",
+    )
     FUNCTION = "get_value"
     CATEGORY = "CozyGen"
     DESCRIPTION = "Select multiple LoRA names and strengths (no loading here)."
@@ -522,15 +544,14 @@ class CozyGenLoraInputMulti:
             (lora_3, strength_3),
             (lora_4, strength_4),
         ]
-        lora_configs = []
+        output_values = []
+        valid_choices = CozyGenLoraInputMulti.get_choices()
         for lora_name, strength in lora_inputs:
-            if lora_name not in CozyGenLoraInputMulti.get_choices() or lora_name == "None" or strength == 0:
+            if lora_name not in valid_choices or lora_name == "None" or strength == 0:
+                output_values.extend(["", 0.0])
                 continue
-            lora_configs.append({
-                "lora": lora_name,
-                "strength": float(strength),
-            })
-        return (lora_configs,)
+            output_values.extend([lora_name, float(strength)])
+        return tuple(output_values)
 
 class CozyGenMetaText(ComfyNodeABC):
     _NODE_CLASS_NAME = "CozyGenMetaText"
