@@ -56,6 +56,14 @@ export const getViewUrl = (filename, subfolder = '', type = 'output') => {
   return `${baseUrl}/view?${params.toString()}`;
 };
 
+export const getObjectInfo = async () => {
+  const response = await fetch(window.location.protocol + '//' + window.location.host + '/object_info');
+  if (!response.ok) {
+    throw new Error('Failed to fetch object info');
+  }
+  return response.json();
+};
+
 export const getGallery = async (subfolder = '', page = 1, pageSize = 20) => {
     const response = await fetch(`/cozygen/gallery?subfolder=${encodeURIComponent(subfolder)}&page=${page}&per_page=${pageSize}`);
     if (!response.ok) {
