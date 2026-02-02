@@ -147,7 +147,7 @@ function App() {
     Object.entries(stateValues || {}).filter(([key]) => inputNames.has(key))
   );
 
-  const prepareWorkflowData = async (data, savedFormData = {}, savedRandomizeState = {}, savedBypassedState = {}) => {
+  const prepareWorkflowData = useCallback(async (data, savedFormData = {}, savedRandomizeState = {}, savedBypassedState = {}) => {
     const workflowCopy = JSON.parse(JSON.stringify(data));
 
     for (const nodeId in workflowCopy) {
@@ -270,7 +270,7 @@ function App() {
     setBypassedState(filteredBypassedState);
 
     return { inputsWithChoices, initialFormData, filteredRandomizeState, filteredBypassedState };
-  };
+  }, []);
 
   const getWorkflowMismatchWarnings = (workflow, objectInfo) => {
     if (!workflow || !objectInfo) return [];

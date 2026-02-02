@@ -78,7 +78,7 @@ const HistoryTab = () => {
     };
 
     fetchOutputs();
-  }, [historyItems, historyOutputs]);
+  }, [historyItems]);
 
   const sortedHistoryItems = useMemo(() => [...historyItems].reverse(), [historyItems]);
 
