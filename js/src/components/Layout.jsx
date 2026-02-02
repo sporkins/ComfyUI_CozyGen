@@ -34,6 +34,14 @@ const Layout = () => {
                         >
                             History
                         </NavLink>
+                        <NavLink
+                            to="/queue"
+                            className={({ isActive }) =>
+                                `px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-accent text-white' : 'text-gray-300 hover:bg-base-300'}`
+                            }
+                        >
+                            Queue
+                        </NavLink>
                     </div>
                 </nav>
             </header>

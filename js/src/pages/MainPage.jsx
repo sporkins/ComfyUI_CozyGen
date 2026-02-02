@@ -134,6 +134,7 @@ function App() {
   const [progressMax, setProgressMax] = useState(0);
   const [modalIsOpen, setModalIsOpen] = useState(false);
   const [statusText, setStatusText] = useState('Generating...');
+  const [queueRemaining, setQueueRemaining] = useState(null);
   const workflowDataRef = useRef(null);
   const skipWorkflowFetchRef = useRef(false);
 
@@ -386,6 +387,11 @@ function App() {
       } else if (msg.type === 'progress') {
           setProgressValue(msg.data.value);
           setProgressMax(msg.data.max);
+      } else if (msg.type === 'status') {
+          const remaining = msg?.data?.status?.exec_info?.queue_remaining;
+          if (typeof remaining === 'number') {
+            setQueueRemaining(remaining);
+          }
       }
     };
 
@@ -543,6 +549,26 @@ function App() {
     }
 
     try {
+        const queueWarningThreshold = 10;
+        try {
+          const queueData = await getQueue();
+          const queueRunning = Array.isArray(queueData?.queue_running) ? queueData.queue_running : [];
+          const queuePending = Array.isArray(queueData?.queue_pending) ? queueData.queue_pending : [];
+          const queueLength = Array.isArray(queueData) ? queueData.length : queueRunning.length + queuePending.length;
+          if (queueLength > queueWarningThreshold) {
+            const proceed = window.confirm(
+              `There are currently ${queueLength} prompts in the queue. Submitting another job may take a while. Continue?`
+            );
+            if (!proceed) {
+              setIsLoading(false);
+              setStatusText('Cancelled');
+              return;
+            }
+          }
+        } catch (error) {
+          console.warn('CozyGen: unable to read queue for warning prompt.', error);
+        }
+
         let finalWorkflow = JSON.parse(JSON.stringify(workflowData));
         const metaTextLines = [];
 
@@ -918,6 +944,11 @@ function App() {
                             style={{ width: `${(progressValue / progressMax) * 100}%` }}
                         ></div>
                     </div>
+                )}
+                {(isLoading && typeof queueRemaining === 'number') && (
+                  <p className="mt-2 text-xs text-gray-400 text-center">
+                    Queue remaining: {queueRemaining}
+                  </p>
                 )}
             </div>
         </div>
