@@ -170,6 +170,14 @@ async def get_choices(request: web.Request) -> web.Response:
         choices = comfy.samplers.KSampler.SCHEDULERS
     elif resolved_choice_type == "sampler":
         choices = comfy.samplers.KSampler.SAMPLERS
+    elif resolved_choice_type == "wanvideo_models":
+        unet_models = folder_paths.get_filename_list("unet_gguf")
+        diffusion_models = folder_paths.get_filename_list("diffusion_models")
+        combined = [*unet_models, *diffusion_models]
+        if combined:
+            choices = combined
+        else:
+            choices = ["none"]
     elif resolved_choice_type in valid_model_types:
         choices = folder_paths.get_filename_list(resolved_choice_type)
     else:

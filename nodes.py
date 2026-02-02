@@ -506,6 +506,65 @@ class CozyGenLoraInputMulti:
                 output.extend([name, float(stren)])
         return tuple(output)
 
+class CozyGenWanVideoModelSelector:
+    _NODE_CLASS_NAME = "CozyGenWanVideoModelSelector"
+
+    @classmethod
+    def get_model_choices(cls):
+        unet_models = folder_paths.get_filename_list("unet_gguf")
+        diffusion_models = folder_paths.get_filename_list("diffusion_models")
+        combined = [*unet_models, *diffusion_models]
+        if not combined:
+            return ["none"]
+        return combined
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        model_choices = CozyGenWanVideoModelSelector.get_model_choices()
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "WanVideo Model Selector"}),
+                "priority": (IO.INT, {"default": 10}),
+                "model_name": (model_choices, {
+                    "default": model_choices[0] if model_choices else "none",
+                    "tooltip": "WanVideo model file from unet_gguf or diffusion_models.",
+                }),
+                "base_precision": (["fp32", "bf16", "fp16", "fp16_fast"], {
+                    "default": "bf16",
+                    "tooltip": "Base precision for loading the model weights.",
+                }),
+                "quantization": ([
+                    "disabled",
+                    "fp8_e4m3fn",
+                    "fp8_e4m3fn_fast",
+                    "fp8_e4m3fn_scaled",
+                    "fp8_e4m3fn_scaled_fast",
+                    "fp8_e5m2",
+                    "fp8_e5m2_fast",
+                    "fp8_e5m2_scaled",
+                    "fp8_e5m2_scaled_fast",
+                ], {
+                    "default": "disabled",
+                    "tooltip": "Optional FP8 quantization mode for WanVideo models.",
+                }),
+                "load_device": (["main_device", "offload_device"], {
+                    "default": "offload_device",
+                    "tooltip": "Select whether to load on the main device or offload device.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = (IO.ANY, IO.ANY, IO.ANY, IO.ANY)
+    RETURN_NAMES = ("model_name", "base_precision", "quantization", "load_device")
+    FUNCTION = "get_value"
+    CATEGORY = "CozyGen"
+    DESCRIPTION = "Select WanVideo model params — outputs connect directly to WanVideoModelLoader inputs."
+
+    def get_value(self, param_name, priority, model_name, base_precision, quantization, load_device):
+        model_choices = CozyGenWanVideoModelSelector.get_model_choices()
+        final_model = model_name if model_name in model_choices else "none"
+        return (str(final_model), str(base_precision), str(quantization), str(load_device))
+
 class CozyGenMetaText(ComfyNodeABC):
     _NODE_CLASS_NAME = "CozyGenMetaText"
     
@@ -536,6 +595,7 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenChoiceInput": CozyGenChoiceInput,
     "CozyGenLoraInput": CozyGenLoraInput,
     "CozyGenLoraInputMulti": CozyGenLoraInputMulti,
+    "CozyGenWanVideoModelSelector": CozyGenWanVideoModelSelector,
     "CozyGenMetaText": CozyGenMetaText,
     "CozyGenBoolInput": CozyGenBoolInput
 }
@@ -551,6 +611,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenChoiceInput": "CozyGen Choice Input",
     "CozyGenLoraInput": "CozyGen Lora Input",
     "CozyGenLoraInputMulti": "CozyGen Lora Input Multi",
+    "CozyGenWanVideoModelSelector": "CozyGen WanVideo Model Selector",
     "CozyGenMetaText": "CozyGen Meta Text",
     "CozyGenBoolInput": "CozyGen Bool Input"
 }
