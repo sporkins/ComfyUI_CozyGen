@@ -622,8 +622,7 @@ function App() {
         return;
       }
 
-      const shouldCheckHistory = !queueFetchSucceeded || activePromptIds.size === 0;
-      if (shouldCheckHistory) {
+      if (!queueFetchSucceeded) {
         const historyData = await getHistory(lastPromptId);
         const historyEntry = historyData?.[lastPromptId] || historyData?.history?.[lastPromptId];
 
