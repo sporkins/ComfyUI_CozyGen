@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import WorkflowSelector from '../components/WorkflowSelector';
 import DynamicForm from '../components/DynamicForm';
 import ImageInput from '../components/ImageInput'; // Import ImageInput
-import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getHistory, getViewUrl } from '../api';
+import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getHistory, getViewUrl, getObjectInfo } from '../api';
 import Modal from 'react-modal';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 
@@ -101,6 +101,20 @@ const WANVIDEO_QUANTIZATIONS = [
   "fp8_e5m2_scaled_fast",
 ];
 const WANVIDEO_LOAD_DEVICES = ["main_device", "offload_device"];
+const HISTORY_KEY = 'history';
+const HISTORY_SELECTION_KEY = 'historySelection';
+const COZYGEN_INPUT_TYPES = [
+    'CozyGenDynamicInput', 
+    'CozyGenImageInput', 
+    'CozyGenFloatInput', 
+    'CozyGenIntInput', 
+    'CozyGenStringInput',
+    'CozyGenChoiceInput',
+    'CozyGenLoraInput',
+    'CozyGenLoraInputMulti',
+    'CozyGenWanVideoModelSelector',
+    'CozyGenBoolInput'
+];
 
 function App() {
   const [workflows, setWorkflows] = useState([]);
@@ -121,10 +135,210 @@ function App() {
   const [modalIsOpen, setModalIsOpen] = useState(false);
   const [statusText, setStatusText] = useState('Generating...');
   const workflowDataRef = useRef(null);
+  const skipWorkflowFetchRef = useRef(false);
 
   useEffect(() => {
     workflowDataRef.current = workflowData;
   }, [workflowData]);
+
+  const buildInputNames = (inputs) => new Set(inputs.map((input) => input.inputs.param_name));
+
+  const filterStateByInputs = (inputNames, stateValues) => Object.fromEntries(
+    Object.entries(stateValues || {}).filter(([key]) => inputNames.has(key))
+  );
+
+  const prepareWorkflowData = async (data, savedFormData = {}, savedRandomizeState = {}, savedBypassedState = {}) => {
+    const workflowCopy = JSON.parse(JSON.stringify(data));
+
+    for (const nodeId in workflowCopy) {
+      const node = workflowCopy[nodeId];
+      if (node.class_type === 'CozyGenImageInput') {
+        if (!node.inputs.param_name) {
+          node.inputs.param_name = "Image Input";
+        }
+      }
+    }
+
+    const allInputNodes = Object.values(workflowCopy).filter(node => COZYGEN_INPUT_TYPES.includes(node.class_type));
+
+    for (const nodeId in workflowCopy) {
+      if (COZYGEN_INPUT_TYPES.includes(workflowCopy[nodeId].class_type)) {
+        workflowCopy[nodeId].id = nodeId;
+      }
+    }
+
+    allInputNodes.sort((a, b) => (a.inputs['priority'] || 0) - (b.inputs['priority'] || 0));
+
+    const inputsWithChoices = await Promise.all(allInputNodes.map(async (input) => {
+      const isDynamicDropdown = input.class_type === 'CozyGenDynamicInput' && input.inputs['param_type'] === 'DROPDOWN';
+      const isChoiceNode = input.class_type === 'CozyGenChoiceInput';
+      const isLoraNode = ["CozyGenLoraInput", "CozyGenLoraInputMulti"].includes(input.class_type);
+      const isWanVideoModelNode = input.class_type === 'CozyGenWanVideoModelSelector';
+
+      if (isDynamicDropdown || isChoiceNode || isLoraNode || isWanVideoModelNode) {
+        const param_name = input.inputs['param_name'];
+        let choiceType = input.inputs['choice_type'] || (input.properties && input.properties['choice_type']);
+                
+        if(isLoraNode) choiceType = "loras";
+
+        if (!choiceType && isDynamicDropdown) {
+          choiceType = choiceTypeMapping[param_name];
+        }
+
+        if (isWanVideoModelNode) {
+          try {
+            const choicesData = await getChoices("wanvideo_models");
+            input.inputs.choices = {
+              modelNames: choicesData.choices || [],
+              basePrecisions: WANVIDEO_BASE_PRECISIONS,
+              quantizations: WANVIDEO_QUANTIZATIONS,
+              loadDevices: WANVIDEO_LOAD_DEVICES,
+            };
+          } catch (error) {
+            console.error(`Error fetching WanVideo models:`, error);
+            input.inputs.choices = {
+              modelNames: [],
+              basePrecisions: WANVIDEO_BASE_PRECISIONS,
+              quantizations: WANVIDEO_QUANTIZATIONS,
+              loadDevices: WANVIDEO_LOAD_DEVICES,
+            };
+          }
+        } else if (choiceType) {
+          try {
+            const choicesData = await getChoices(choiceType);
+            input.inputs.choices = choicesData.choices || [];
+            if(isLoraNode && !input.inputs.choices.includes("None")) {
+              input.inputs.choices.unshift("None");
+            }
+          } catch (error) {
+            console.error(`Error fetching choices for ${param_name} (choiceType: ${choiceType}):`, error);
+            input.inputs.choices = [];
+          }
+        }
+      }
+      return input;
+    }));
+
+    const inputNames = buildInputNames(inputsWithChoices);
+    const filteredRandomizeState = filterStateByInputs(inputNames, savedRandomizeState);
+    const filteredBypassedState = filterStateByInputs(inputNames, savedBypassedState);
+
+    const initialFormData = {};
+    inputsWithChoices.forEach(input => {
+      const param_name = input.inputs['param_name'];
+      if (Object.prototype.hasOwnProperty.call(savedFormData, param_name)) {
+        initialFormData[param_name] = savedFormData[param_name];
+        return;
+      }
+
+      let defaultValue;
+      if (['CozyGenDynamicInput', 'CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput'].includes(input.class_type)) {
+        defaultValue = input.inputs['default_value'];
+        if (input.class_type === 'CozyGenIntInput') {
+          defaultValue = parseInt(defaultValue, 10);
+        } else if (input.class_type === 'CozyGenFloatInput') {
+          defaultValue = parseFloat(defaultValue);
+        }
+      } else if (input.class_type === 'CozyGenChoiceInput') {
+        defaultValue = input.inputs.choices && input.inputs.choices.length > 0 ? input.inputs.choices[0] : '';
+      } else if(input.class_type === "CozyGenLoraInput") {
+        defaultValue = { lora: input.inputs.lora_value, strength: input.inputs.strength_value };
+      } else if(input.class_type === "CozyGenLoraInputMulti") {
+        defaultValue = [0, 1, 2, 3, 4].map((index) => ({
+          lora: input.inputs[`lora_${index}`],
+          strength: input.inputs[`strength_${index}`],
+        }));
+      } else if(input.class_type === "CozyGenWanVideoModelSelector") {
+        defaultValue = {
+          model_name: input.inputs.model_name || input.inputs.choices?.modelNames?.[0] || 'none',
+          base_precision: input.inputs.base_precision || WANVIDEO_BASE_PRECISIONS[0],
+          quantization: input.inputs.quantization || WANVIDEO_QUANTIZATIONS[0],
+          load_device: input.inputs.load_device || WANVIDEO_LOAD_DEVICES[1],
+        };
+      } else if (input.class_type === 'CozyGenImageInput') {
+        defaultValue = input.inputs.image;
+      } else if(input.class_type === 'CozyGenBoolInput') {
+        defaultValue = input.inputs.value;
+      }
+      initialFormData[param_name] = defaultValue;
+    });
+
+    setWorkflowData(workflowCopy);
+    setDynamicInputs(inputsWithChoices);
+    setFormData(initialFormData);
+    setRandomizeState(filteredRandomizeState);
+    setBypassedState(filteredBypassedState);
+
+    return { inputsWithChoices, initialFormData, filteredRandomizeState, filteredBypassedState };
+  };
+
+  const getWorkflowMismatchWarnings = (workflow, objectInfo) => {
+    if (!workflow || !objectInfo) return [];
+    const warnings = [];
+    const seenClasses = new Set();
+    Object.values(workflow).forEach((node) => {
+      const classType = node?.class_type;
+      if (!classType || seenClasses.has(classType)) return;
+      seenClasses.add(classType);
+
+      const info = objectInfo[classType];
+      if (!info) {
+        warnings.push(`${classType} (missing class)`);
+        return;
+      }
+
+      const requiredInputs = info?.input?.required || {};
+      const optionalInputs = info?.input?.optional || {};
+      const infoInputs = new Set([...Object.keys(requiredInputs), ...Object.keys(optionalInputs)]);
+      const nodeInputs = Object.keys(node.inputs || {});
+      const hasDifference = nodeInputs.some((key) => !infoInputs.has(key)) || [...infoInputs].some((key) => !nodeInputs.includes(key));
+      if (hasDifference) {
+        warnings.push(`${classType} (inputs differ)`);
+      }
+    });
+    return warnings;
+  };
+
+  const applyHistorySelection = useCallback(async (historyItem) => {
+    if (!historyItem?.json) return;
+    const workflow = historyItem.json?.prompt || historyItem.json;
+    if (!workflow) return;
+
+    try {
+      const objectInfo = await getObjectInfo();
+      const warnings = getWorkflowMismatchWarnings(workflow, objectInfo);
+      if (warnings.length > 0) {
+        const proceed = window.confirm(
+          `This workflow may be outdated. The following mismatches were found:\n\n${warnings.join('\n')}\n\nLoad anyway?`
+        );
+        if (!proceed) {
+          return;
+        }
+      }
+    } catch (error) {
+      console.warn('CozyGen: unable to verify workflow compatibility.', error);
+    }
+
+    const fields = historyItem.fields || {};
+    const savedFormData = fields.formData || {};
+    const savedRandomizeState = fields.randomizeState || {};
+    const savedBypassedState = fields.bypassedState || {};
+    const workflowName = fields.selectedWorkflow;
+
+    if (workflowName) {
+      skipWorkflowFetchRef.current = true;
+      setSelectedWorkflow(workflowName);
+      localStorage.setItem('selectedWorkflow', workflowName);
+    }
+
+    await prepareWorkflowData(workflow, savedFormData, savedRandomizeState, savedBypassedState);
+
+    if (workflowName) {
+      localStorage.setItem(`${workflowName}_formData`, JSON.stringify(savedFormData));
+      localStorage.setItem(`${workflowName}_randomizeState`, JSON.stringify(savedRandomizeState));
+      localStorage.setItem(`${workflowName}_bypassedState`, JSON.stringify(savedBypassedState));
+    }
+  }, [prepareWorkflowData]);
 
   const openModalWithImage = (imageSrc) => {
     setSelectedPreviewImage(imageSrc);
@@ -213,149 +427,17 @@ function App() {
 
     const fetchWorkflowData = async () => {
       try {
+        if (skipWorkflowFetchRef.current) {
+          skipWorkflowFetchRef.current = false;
+          return;
+        }
+
         const data = await getWorkflow(selectedWorkflow);
-        setWorkflowData(data);
-
-        // Ensure param_name is present in CozyGenImageInput nodes within the workflowData
-        for (const nodeId in data) {
-            const node = data[nodeId];
-            if (node.class_type === 'CozyGenImageInput') {
-                if (!node.inputs.param_name) {
-                    node.inputs.param_name = "Image Input"; // Set default if missing
-                }
-            }
-        }
-
-        // New: Define all input types the UI should recognize
-        const COZYGEN_INPUT_TYPES = [
-            'CozyGenDynamicInput', 
-            'CozyGenImageInput', 
-            'CozyGenFloatInput', 
-            'CozyGenIntInput', 
-            'CozyGenStringInput',
-            'CozyGenChoiceInput',
-            'CozyGenLoraInput',
-            'CozyGenLoraInputMulti',
-            'CozyGenWanVideoModelSelector',
-            'CozyGenBoolInput'
-        ];
-
-        // Find all nodes that are one of our recognized input types
-        const allInputNodes = Object.values(data).filter(node => COZYGEN_INPUT_TYPES.includes(node.class_type));
-
-        // Add the node's ID to its object for easy reference
-        for (const nodeId in data) {
-            if (COZYGEN_INPUT_TYPES.includes(data[nodeId].class_type)) {
-                data[nodeId].id = nodeId;
-            }
-        }
-
-        // Sort all inputs by the priority field
-        allInputNodes.sort((a, b) => (a.inputs['priority'] || 0) - (b.inputs['priority'] || 0));
-
-        // Fetch choices for dropdowns (applies to both Dynamic and Choice inputs)
-        const inputsWithChoices = await Promise.all(allInputNodes.map(async (input) => {
-            const isDynamicDropdown = input.class_type === 'CozyGenDynamicInput' && input.inputs['param_type'] === 'DROPDOWN';
-            const isChoiceNode = input.class_type === 'CozyGenChoiceInput';
-            const isLoraNode = ["CozyGenLoraInput", "CozyGenLoraInputMulti"].includes(input.class_type);
-            const isWanVideoModelNode = input.class_type === 'CozyGenWanVideoModelSelector';
-
-            if (isDynamicDropdown || isChoiceNode || isLoraNode || isWanVideoModelNode) {
-                const param_name = input.inputs['param_name'];
-                let choiceType = input.inputs['choice_type'] || (input.properties && input.properties['choice_type']);
-                
-                if(isLoraNode) choiceType = "loras";
-
-                if (!choiceType && isDynamicDropdown) { // Fallback for older dynamic nodes
-                    choiceType = choiceTypeMapping[param_name];
-                }
-
-                if (isWanVideoModelNode) {
-                    try {
-                        const choicesData = await getChoices("wanvideo_models");
-                        input.inputs.choices = {
-                            modelNames: choicesData.choices || [],
-                            basePrecisions: WANVIDEO_BASE_PRECISIONS,
-                            quantizations: WANVIDEO_QUANTIZATIONS,
-                            loadDevices: WANVIDEO_LOAD_DEVICES,
-                        };
-                    } catch (error) {
-                        console.error(`Error fetching WanVideo models:`, error);
-                        input.inputs.choices = {
-                            modelNames: [],
-                            basePrecisions: WANVIDEO_BASE_PRECISIONS,
-                            quantizations: WANVIDEO_QUANTIZATIONS,
-                            loadDevices: WANVIDEO_LOAD_DEVICES,
-                        };
-                    }
-                } else if (choiceType) {
-                    try {
-                        const choicesData = await getChoices(choiceType);
-                        // For dynamic nodes, we put choices in a hidden field.
-                        // For the new choice node, the JS will handle it, but we can preload here.
-                        input.inputs.choices = choicesData.choices || [];
-                        if(isLoraNode && !input.inputs.choices.includes("None")) {
-                            input.inputs.choices.unshift("None");
-                        }
-                    } catch (error) {
-                        console.error(`Error fetching choices for ${param_name} (choiceType: ${choiceType}):`, error);
-                        input.inputs.choices = [];
-                    }
-                }
-            }
-            return input;
-        }));
-
-        setDynamicInputs(inputsWithChoices);
-
         const savedFormData = JSON.parse(localStorage.getItem(`${selectedWorkflow}_formData`)) || {};
-        
-        // Initialize formData with default values if not already present
-        const initialFormData = {};
-        inputsWithChoices.forEach(input => { // Use inputsWithChoices here
-            const param_name = input.inputs['param_name'];
-            if (savedFormData[param_name] === undefined) {
-                let defaultValue;
-                if (['CozyGenDynamicInput', 'CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput'].includes(input.class_type)) {
-                    defaultValue = input.inputs['default_value'];
-                    if (input.class_type === 'CozyGenIntInput') {
-                        defaultValue = parseInt(defaultValue, 10);
-                    } else if (input.class_type === 'CozyGenFloatInput') {
-                        defaultValue = parseFloat(defaultValue);
-                    }
-                } else if (input.class_type === 'CozyGenChoiceInput') {
-                    defaultValue = input.inputs.choices && input.inputs.choices.length > 0 ? input.inputs.choices[0] : '';
-                } else if(input.class_type === "CozyGenLoraInput") {
-                    defaultValue = { lora: input.inputs.lora_value, strength: input.inputs.strength_value };
-                } else if(input.class_type === "CozyGenLoraInputMulti") {
-                    defaultValue = [0, 1, 2, 3, 4].map((index) => ({
-                        lora: input.inputs[`lora_${index}`],
-                        strength: input.inputs[`strength_${index}`],
-                    }));
-                } else if(input.class_type === "CozyGenWanVideoModelSelector") {
-                    defaultValue = {
-                        model_name: input.inputs.model_name || input.inputs.choices?.modelNames?.[0] || 'none',
-                        base_precision: input.inputs.base_precision || WANVIDEO_BASE_PRECISIONS[0],
-                        quantization: input.inputs.quantization || WANVIDEO_QUANTIZATIONS[0],
-                        load_device: input.inputs.load_device || WANVIDEO_LOAD_DEVICES[1],
-                    };
-                } else if (input.class_type === 'CozyGenImageInput') {
-                    defaultValue = input.inputs.image;
-                } else if(input.class_type === 'CozyGenBoolInput') {
-                    defaultValue = input.inputs.value;
-                }
-                initialFormData[param_name] = defaultValue;
-            } else {
-                initialFormData[param_name] = savedFormData[param_name];
-            }
-        });
-        setFormData(initialFormData);
-
         const savedRandomizeState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_randomizeState`)) || {};
-        setRandomizeState(savedRandomizeState);
-
         const savedBypassedState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_bypassedState`)) || {};
-        setBypassedState(savedBypassedState);
+
+        await prepareWorkflowData(data, savedFormData, savedRandomizeState, savedBypassedState);
 
       } catch (error) {
         console.error(error);
@@ -364,7 +446,21 @@ function App() {
     };
 
     fetchWorkflowData();
-  }, [selectedWorkflow]);
+  }, [selectedWorkflow, prepareWorkflowData]);
+
+  useEffect(() => {
+    const storedHistory = localStorage.getItem(HISTORY_SELECTION_KEY);
+    if (!storedHistory) {
+      return;
+    }
+    localStorage.removeItem(HISTORY_SELECTION_KEY);
+    try {
+      const historyItem = JSON.parse(storedHistory);
+      applyHistorySelection(historyItem);
+    } catch (error) {
+      console.warn('CozyGen: failed to load history selection.', error);
+    }
+  }, [applyHistorySelection]);
 
   // --- Handlers ---
   const handleWorkflowSelect = (workflow) => {
@@ -427,6 +523,15 @@ function App() {
     });
 
     return imageUrls;
+  };
+
+  const appendHistoryEntry = (entry) => {
+    const existingHistory = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+    const updatedHistory = [...existingHistory, entry];
+    if (updatedHistory.length > 100) {
+      updatedHistory.splice(0, updatedHistory.length - 100);
+    }
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
   };
 
   const handleGenerate = async (clear = true) => {
@@ -573,10 +678,23 @@ function App() {
             }
         }
 
-        const queueResponse = await queuePrompt({ prompt: finalWorkflow });
+        const promptPayload = { prompt: finalWorkflow };
+        const queueResponse = await queuePrompt(promptPayload);
         const promptId = queueResponse?.prompt_id;
         if (promptId) {
-          localStorage.setItem('lastPromptId', promptId);
+          const promptIdString = String(promptId);
+          localStorage.setItem('lastPromptId', promptIdString);
+          appendHistoryEntry({
+            id: promptIdString,
+            timestamp: new Date().toISOString(),
+            json: promptPayload,
+            fields: {
+              formData: updatedFormData,
+              randomizeState,
+              bypassedState,
+              selectedWorkflow,
+            },
+          });
         } else {
           console.warn('CozyGen: queue response missing prompt_id.');
           localStorage.removeItem('lastPromptId');
