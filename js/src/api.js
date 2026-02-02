@@ -30,6 +30,32 @@ export const queuePrompt = async (prompt) => {
     return response.json();
 };
 
+export const getQueue = async () => {
+  const response = await fetch(window.location.protocol + '//' + window.location.host + '/queue');
+  if (!response.ok) {
+    throw new Error('Failed to fetch queue');
+  }
+  return response.json();
+};
+
+export const getHistory = async (promptId) => {
+  const response = await fetch(window.location.protocol + '//' + window.location.host + `/history/${promptId}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch history for prompt: ${promptId}`);
+  }
+  return response.json();
+};
+
+export const getViewUrl = (filename, subfolder = '', type = 'output') => {
+  const baseUrl = window.location.protocol + '//' + window.location.host;
+  const params = new URLSearchParams({
+    filename,
+    subfolder,
+    type,
+  });
+  return `${baseUrl}/view?${params.toString()}`;
+};
+
 export const getGallery = async (subfolder = '', page = 1, pageSize = 20) => {
     const response = await fetch(`/cozygen/gallery?subfolder=${encodeURIComponent(subfolder)}&page=${page}&per_page=${pageSize}`);
     if (!response.ok) {

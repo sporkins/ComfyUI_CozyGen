@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import WorkflowSelector from '../components/WorkflowSelector';
 import DynamicForm from '../components/DynamicForm';
 import ImageInput from '../components/ImageInput'; // Import ImageInput
-import { getWorkflows, getWorkflow, queuePrompt, getChoices } from '../api';
+import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getHistory, getViewUrl } from '../api';
 import Modal from 'react-modal';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 
@@ -132,56 +132,60 @@ function App() {
   };
 
   // --- WebSocket Connection ---
-  useEffect(() => {
-    const connectWebSocket = () => {
-      const protocol = window.location.protocol.startsWith('https') ? 'wss' : 'ws';
-      const host = window.location.host;
-      const wsUrl = `${protocol}://${host}/ws`;
+  const connectWebSocket = useCallback(() => {
+    if (websocketRef.current && [WebSocket.OPEN, WebSocket.CONNECTING].includes(websocketRef.current.readyState)) {
+      return;
+    }
 
-      websocketRef.current = new WebSocket(wsUrl);
+    const protocol = window.location.protocol.startsWith('https') ? 'wss' : 'ws';
+    const host = window.location.host;
+    const wsUrl = `${protocol}://${host}/ws`;
 
-      websocketRef.current.onmessage = (event) => {
-        if (typeof event.data !== 'string') {
-            console.log("CozyGen: Received binary WebSocket message, ignoring.");
-            return;
-        }
+    websocketRef.current = new WebSocket(wsUrl);
 
-        const msg = JSON.parse(event.data);
+    websocketRef.current.onmessage = (event) => {
+      if (typeof event.data !== 'string') {
+          console.log("CozyGen: Received binary WebSocket message, ignoring.");
+          return;
+      }
 
-        if (msg.type === 'cozygen_batch_ready') {
-            const imageUrls = msg.data.images.map(image => image.url);
-            if (imageUrls.length > 0) {
-                setPreviewImages(imageUrls);
-                localStorage.setItem('lastPreviewImages', JSON.stringify(imageUrls));
-            }
-            setIsLoading(false);
-            setProgressValue(0);
-            setProgressMax(0);
-            setStatusText('Finished');
-        } else if (msg.type === 'executing') {
-            const nodeId = msg.data.node;
-            // If nodeId is null, it means the prompt is finished, but we wait for our own message.
-            if (nodeId && workflowDataRef.current && workflowDataRef.current[nodeId]) {
-                const node = workflowDataRef.current[nodeId];
-                const nodeName = node.title || node.class_type;
-                setStatusText(`Executing: ${nodeName}`);
-            }
-        } else if (msg.type === 'progress') {
-            setProgressValue(msg.data.value);
-            setProgressMax(msg.data.max);
-        }
-      };
+      const msg = JSON.parse(event.data);
 
-      websocketRef.current.onclose = () => {
-        setTimeout(connectWebSocket, 1000);
-      };
-
-      websocketRef.current.onerror = (err) => {
-        console.error('CozyGen: WebSocket error: ', err);
-        websocketRef.current.close();
-      };
+      if (msg.type === 'cozygen_batch_ready') {
+          const imageUrls = msg.data.images.map(image => image.url);
+          if (imageUrls.length > 0) {
+              setPreviewImages(imageUrls);
+              localStorage.setItem('lastPreviewImages', JSON.stringify(imageUrls));
+          }
+          setIsLoading(false);
+          setProgressValue(0);
+          setProgressMax(0);
+          setStatusText('Finished');
+      } else if (msg.type === 'executing') {
+          const nodeId = msg.data.node;
+          // If nodeId is null, it means the prompt is finished, but we wait for our own message.
+          if (nodeId && workflowDataRef.current && workflowDataRef.current[nodeId]) {
+              const node = workflowDataRef.current[nodeId];
+              const nodeName = node.title || node.class_type;
+              setStatusText(`Executing: ${nodeName}`);
+          }
+      } else if (msg.type === 'progress') {
+          setProgressValue(msg.data.value);
+          setProgressMax(msg.data.max);
+      }
     };
 
+    websocketRef.current.onclose = () => {
+      setTimeout(connectWebSocket, 1000);
+    };
+
+    websocketRef.current.onerror = (err) => {
+      console.error('CozyGen: WebSocket error: ', err);
+      websocketRef.current.close();
+    };
+  }, []);
+
+  useEffect(() => {
     connectWebSocket();
 
     return () => {
@@ -189,7 +193,7 @@ function App() {
         websocketRef.current.close();
       }
     };
-  }, []);
+  }, [connectWebSocket]);
 
   // --- Data Fetching ---
   useEffect(() => {
@@ -391,7 +395,37 @@ function App() {
     localStorage.setItem(`${selectedWorkflow}_bypassedState`, JSON.stringify(newBypassedState));
   };
 
-  
+  const extractPromptId = (item) => {
+    if (!item) return null;
+    if (typeof item === 'string') return item;
+    if (typeof item.prompt_id === 'string') return item.prompt_id;
+    if (Array.isArray(item) && typeof item[0] === 'string') return item[0];
+    if (Array.isArray(item) && item[1] && typeof item[1].prompt_id === 'string') return item[1].prompt_id;
+    return null;
+  };
+
+  const extractHistoryImages = (historyEntry) => {
+    const outputs = historyEntry?.outputs || {};
+    const imageUrls = [];
+
+    Object.values(outputs).forEach((output) => {
+      const outputImages = output?.images || output?.gifs || output?.videos;
+      if (!Array.isArray(outputImages)) {
+        return;
+      }
+      outputImages.forEach((image) => {
+        if (!image) return;
+        if (typeof image === 'string') {
+          imageUrls.push(getViewUrl(image));
+          return;
+        }
+        if (!image.filename) return;
+        imageUrls.push(getViewUrl(image.filename, image.subfolder || '', image.type || 'output'));
+      });
+    });
+
+    return imageUrls;
+  };
 
   const handleGenerate = async (clear = true) => {
     if (!workflowData) return;
@@ -537,12 +571,78 @@ function App() {
             }
         }
 
-        await queuePrompt({ prompt: finalWorkflow });
+        const queueResponse = await queuePrompt({ prompt: finalWorkflow });
+        const promptId = queueResponse?.prompt_id;
+        if (promptId) {
+          localStorage.setItem('lastPromptId', promptId);
+        } else {
+          console.warn('CozyGen: queue response missing prompt_id.');
+          localStorage.removeItem('lastPromptId');
+        }
 
     } catch (error) {
         console.error("Failed to queue prompt:", error);
         setIsLoading(false);
         setStatusText('Error queuing prompt');
+    }
+  };
+
+  const handleResumeSession = async () => {
+    const lastPromptId = localStorage.getItem('lastPromptId');
+    if (!lastPromptId) {
+      alert('No previous session found to resume.');
+      return;
+    }
+
+    setStatusText('Checking queue...');
+
+    try {
+      let queueData = null;
+      try {
+        queueData = await getQueue();
+      } catch (error) {
+        console.warn('CozyGen: failed to read queue, checking history instead.', error);
+      }
+
+      const queueRunning = Array.isArray(queueData?.queue_running) ? queueData.queue_running : [];
+      const queuePending = Array.isArray(queueData?.queue_pending) ? queueData.queue_pending : [];
+      const allQueueItems = queueData && Array.isArray(queueData) ? queueData : [...queueRunning, ...queuePending];
+      const activePromptIds = new Set(allQueueItems.map(extractPromptId).filter(Boolean));
+
+      if (activePromptIds.has(lastPromptId)) {
+        setIsLoading(true);
+        setStatusText('Resuming prompt...');
+        if (!websocketRef.current || websocketRef.current.readyState === WebSocket.CLOSED) {
+          connectWebSocket();
+        }
+        return;
+      }
+
+      const historyData = await getHistory(lastPromptId);
+      const historyEntry = historyData?.[lastPromptId] || historyData?.history?.[lastPromptId];
+
+      if (!historyEntry) {
+        alert('Previous session has expired or is no longer available.');
+        localStorage.removeItem('lastPromptId');
+        return;
+      }
+
+      const imageUrls = extractHistoryImages(historyEntry);
+      if (imageUrls.length === 0) {
+        alert('Previous session completed, but no images were found.');
+        localStorage.removeItem('lastPromptId');
+        return;
+      }
+
+      setPreviewImages(imageUrls);
+      localStorage.setItem('lastPreviewImages', JSON.stringify(imageUrls));
+      setIsLoading(false);
+      setProgressValue(0);
+      setProgressMax(0);
+      setStatusText('Finished');
+    } catch (error) {
+      console.error('Failed to resume session:', error);
+      alert('Unable to resume the previous session. Please try again.');
     }
   };
 
@@ -598,6 +698,13 @@ function App() {
                   selectedWorkflow={selectedWorkflow}
                   onSelect={handleWorkflowSelect}
                 />
+                <button
+                  onClick={handleResumeSession}
+                  disabled={isLoading}
+                  className="w-full px-4 py-2 bg-base-300 text-white rounded-lg hover:bg-base-300/80 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  Resume Session
+                </button>
 
                 {/* Render ImageInput separately */}
                 {dynamicInputs.filter(input => input.class_type === 'CozyGenImageInput').map(input => (
