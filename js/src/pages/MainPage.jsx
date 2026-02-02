@@ -398,9 +398,11 @@ function App() {
   const extractPromptId = (item) => {
     if (!item) return null;
     if (typeof item === 'string') return item;
-    if (typeof item.prompt_id === 'string') return item.prompt_id;
-    if (Array.isArray(item) && typeof item[0] === 'string') return item[0];
-    if (Array.isArray(item) && item[1] && typeof item[1].prompt_id === 'string') return item[1].prompt_id;
+    if (typeof item.prompt_id === 'string' || typeof item.prompt_id === 'number') return String(item.prompt_id);
+    if (Array.isArray(item) && (typeof item[0] === 'string' || typeof item[0] === 'number')) return String(item[0]);
+    if (Array.isArray(item) && item[1] && (typeof item[1].prompt_id === 'string' || typeof item[1].prompt_id === 'number')) {
+      return String(item[1].prompt_id);
+    }
     return null;
   };
 
@@ -598,8 +600,10 @@ function App() {
 
     try {
       let queueData = null;
+      let queueFetchSucceeded = false;
       try {
         queueData = await getQueue();
+        queueFetchSucceeded = true;
       } catch (error) {
         console.warn('CozyGen: failed to read queue, checking history instead.', error);
       }
@@ -618,28 +622,37 @@ function App() {
         return;
       }
 
-      const historyData = await getHistory(lastPromptId);
-      const historyEntry = historyData?.[lastPromptId] || historyData?.history?.[lastPromptId];
+      if (!queueFetchSucceeded) {
+        const historyData = await getHistory(lastPromptId);
+        const historyEntry = historyData?.[lastPromptId] || historyData?.history?.[lastPromptId];
 
-      if (!historyEntry) {
-        alert('Previous session has expired or is no longer available.');
-        localStorage.removeItem('lastPromptId');
+        if (!historyEntry) {
+          alert('Previous session has expired or is no longer available.');
+          localStorage.removeItem('lastPromptId');
+          return;
+        }
+
+        const imageUrls = extractHistoryImages(historyEntry);
+        if (imageUrls.length === 0) {
+          alert('Previous session completed, but no images were found.');
+          localStorage.removeItem('lastPromptId');
+          return;
+        }
+
+        setPreviewImages(imageUrls);
+        localStorage.setItem('lastPreviewImages', JSON.stringify(imageUrls));
+        setIsLoading(false);
+        setProgressValue(0);
+        setProgressMax(0);
+        setStatusText('Finished');
         return;
       }
 
-      const imageUrls = extractHistoryImages(historyEntry);
-      if (imageUrls.length === 0) {
-        alert('Previous session completed, but no images were found.');
-        localStorage.removeItem('lastPromptId');
-        return;
+      setIsLoading(true);
+      setStatusText('Resuming prompt...');
+      if (!websocketRef.current || websocketRef.current.readyState === WebSocket.CLOSED) {
+        connectWebSocket();
       }
-
-      setPreviewImages(imageUrls);
-      localStorage.setItem('lastPreviewImages', JSON.stringify(imageUrls));
-      setIsLoading(false);
-      setProgressValue(0);
-      setProgressMax(0);
-      setStatusText('Finished');
     } catch (error) {
       console.error('Failed to resume session:', error);
       alert('Unable to resume the previous session. Please try again.');
