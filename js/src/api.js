@@ -38,6 +38,30 @@ export const getQueue = async () => {
   return response.json();
 };
 
+export const deleteQueueItem = async (promptId) => {
+  const response = await fetch(window.location.protocol + '//' + window.location.host + '/queue', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ delete: [promptId] }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to delete queue item');
+  }
+  return response.json();
+};
+
+export const interruptQueue = async () => {
+  const response = await fetch(window.location.protocol + '//' + window.location.host + '/interrupt', {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error('Failed to interrupt execution');
+  }
+  return response.json();
+};
+
 export const getHistory = async (promptId) => {
   const response = await fetch(window.location.protocol + '//' + window.location.host + `/history/${promptId}`);
   if (!response.ok) {
