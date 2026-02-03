@@ -114,6 +114,28 @@ export const updateCozyHistoryItem = async (historyId, payload) => {
   return response.json();
 };
 
+export const getCozySession = async () => {
+  const response = await fetch(`${BASE_URL}/session`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch CozyGen session');
+  }
+  return response.json();
+};
+
+export const saveCozySession = async (payload) => {
+  const response = await fetch(`${BASE_URL}/session`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to save CozyGen session');
+  }
+  return response.json();
+};
+
 export const getViewUrl = (filename, subfolder = '', type = 'output', options = {}) => {
   const baseUrl = window.location.protocol + '//' + window.location.host;
   const params = new URLSearchParams({

@@ -109,6 +109,23 @@ def list_history_entries():
     entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
     return entries
 
+def get_session_path() -> str:
+    cache_dir = get_cache_dir()
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "session.json")
+
+def load_session():
+    path = get_session_path()
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def write_session(data: dict):
+    path = get_session_path()
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+
 @functools.lru_cache(maxsize=256)
 def build_thumbnail_bytes(path: str, mtime: float, size: int, width: int, quality: int, fmt: str):
     with Image.open(path) as img:
@@ -335,6 +352,24 @@ async def update_history_item(request: web.Request) -> web.Response:
     write_history_entry(history_id, merged)
     return web.json_response({"status": "ok"})
 
+async def get_session(request: web.Request) -> web.Response:
+    data = load_session()
+    if not data:
+        return web.json_response({"error": "Session not found"}, status=404)
+    return web.json_response(data)
+
+async def save_session(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+    if not isinstance(payload, dict):
+        return web.json_response({"error": "Invalid session payload"}, status=400)
+    existing = load_session() or {}
+    merged = {**existing, **payload}
+    write_session(merged)
+    return web.json_response({"status": "ok"})
+
 async def upload_workflow_file(request: web.Request) -> web.Response:
     filename = request.match_info.get('filename', 'workflow.json')
     workflows_dir = get_workflows_dir()
@@ -426,6 +461,8 @@ routes = [
     web.get('/cozygen/history/{history_id}', get_history_item),
     web.post('/cozygen/history', save_history_item),
     web.post('/cozygen/history/{history_id}', update_history_item),
+    web.get('/cozygen/session', get_session),
+    web.post('/cozygen/session', save_session),
     web.post('/cozygen/upload_image', upload_image),
     web.get('/cozygen/workflows', get_workflow_list),
     web.get('/cozygen/workflows/{filename}', get_workflow_file),

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import WorkflowSelector from '../components/WorkflowSelector';
 import DynamicForm from '../components/DynamicForm';
 import ImageInput from '../components/ImageInput'; // Import ImageInput
-import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getHistory, getViewUrl, getObjectInfo, saveCozyHistoryItem, updateCozyHistoryItem } from '../api';
+import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getViewUrl, getObjectInfo, saveCozyHistoryItem, updateCozyHistoryItem, getCozySession, saveCozySession } from '../api';
 import Modal from 'react-modal';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 
@@ -365,7 +365,7 @@ function App() {
 
       const msg = JSON.parse(event.data);
 
-        if (msg.type === 'cozygen_batch_ready') {
+      if (msg.type === 'cozygen_batch_ready') {
           const imageUrls = msg.data.images.map(image => image.url);
           if (imageUrls.length > 0) {
               setPreviewImages(imageUrls);
@@ -381,7 +381,37 @@ function App() {
               console.warn('CozyGen: failed to update history previews', error);
             });
           }
-      } else if (msg.type === 'executing') {
+          saveCozySession({
+            id: lastPromptId,
+            status: 'finished',
+            preview_images: imageUrls,
+            updated_at: new Date().toISOString(),
+          }).catch(() => {});
+        } else if (msg.type === 'cozygen_video_ready') {
+          const videoUrl = msg?.data?.video_url
+            || (msg?.data?.filename ? getViewUrl(msg.data.filename, msg.data.subfolder || '', msg.data.type || 'output') : null);
+          const previewUrls = videoUrl ? [videoUrl] : [];
+          if (previewUrls.length > 0) {
+            setPreviewImages(previewUrls);
+            localStorage.setItem('lastPreviewImages', JSON.stringify(previewUrls));
+          }
+          setIsLoading(false);
+          setProgressValue(0);
+          setProgressMax(0);
+          setStatusText('Finished');
+          const lastPromptId = localStorage.getItem('lastPromptId');
+          if (lastPromptId && previewUrls.length > 0) {
+            updateCozyHistoryItem(lastPromptId, { preview_images: previewUrls }).catch((error) => {
+              console.warn('CozyGen: failed to update history previews', error);
+            });
+          }
+          saveCozySession({
+            id: lastPromptId,
+            status: 'finished',
+            preview_images: previewUrls,
+            updated_at: new Date().toISOString(),
+          }).catch(() => {});
+        } else if (msg.type === 'executing') {
           const nodeId = msg.data.node;
           // If nodeId is null, it means the prompt is finished, but we wait for our own message.
           if (nodeId && workflowDataRef.current && workflowDataRef.current[nodeId]) {
@@ -389,9 +419,26 @@ function App() {
               const nodeName = node.title || node.class_type;
               setStatusText(`Executing: ${nodeName}`);
           }
+          const lastPromptId = localStorage.getItem('lastPromptId');
+          if (lastPromptId) {
+            saveCozySession({
+              id: lastPromptId,
+              status: 'running',
+              updated_at: new Date().toISOString(),
+            }).catch(() => {});
+          }
       } else if (msg.type === 'progress') {
           setProgressValue(msg.data.value);
           setProgressMax(msg.data.max);
+          const lastPromptId = localStorage.getItem('lastPromptId');
+          if (lastPromptId) {
+            saveCozySession({
+              id: lastPromptId,
+              status: 'running',
+              progress: { value: msg.data.value, max: msg.data.max },
+              updated_at: new Date().toISOString(),
+            }).catch(() => {});
+          }
       } else if (msg.type === 'status') {
           const remaining = msg?.data?.status?.exec_info?.queue_remaining;
           if (typeof remaining === 'number') {
@@ -432,6 +479,60 @@ function App() {
     };
     fetchWorkflows();
   }, []);
+
+  useEffect(() => {
+    const loadSession = async () => {
+      try {
+        const session = await getCozySession();
+        if (!session?.id) return;
+        localStorage.setItem('lastPromptId', session.id);
+
+        if (Array.isArray(session.preview_images) && session.preview_images.length > 0) {
+          setPreviewImages(session.preview_images);
+          localStorage.setItem('lastPreviewImages', JSON.stringify(session.preview_images));
+          setStatusText(session.status === 'finished' ? 'Finished' : 'Generating...');
+        }
+        if (session?.progress && typeof session.progress.value === 'number') {
+          setProgressValue(session.progress.value);
+          setProgressMax(session.progress.max || 0);
+        }
+
+        let isActive = false;
+        try {
+          const queueData = await getQueue();
+          const queueRunning = Array.isArray(queueData?.queue_running) ? queueData.queue_running : [];
+          const queuePending = Array.isArray(queueData?.queue_pending) ? queueData.queue_pending : [];
+          const allQueueItems = Array.isArray(queueData) ? queueData : [...queueRunning, ...queuePending];
+          const activeIds = new Set(allQueueItems.map((item) => {
+            if (!item) return null;
+            if (typeof item === 'string' || typeof item === 'number') return String(item);
+            if (typeof item.prompt_id === 'string' || typeof item.prompt_id === 'number') return String(item.prompt_id);
+            if (Array.isArray(item) && (typeof item[0] === 'string' || typeof item[0] === 'number')) return String(item[0]);
+            if (Array.isArray(item) && item[1] && (typeof item[1].prompt_id === 'string' || typeof item[1].prompt_id === 'number')) return String(item[1].prompt_id);
+            return null;
+          }).filter(Boolean));
+          isActive = activeIds.has(session.id);
+        } catch (error) {
+          console.warn('CozyGen: failed to read queue for session restore', error);
+        }
+
+        if (isActive) {
+          setIsLoading(true);
+          setStatusText('Generating...');
+          connectWebSocket();
+        } else if (session.status === 'finished') {
+          setIsLoading(false);
+          setStatusText('Finished');
+        } else {
+          setIsLoading(false);
+        }
+      } catch (error) {
+        // no session yet
+      }
+    };
+
+    loadSession();
+  }, [connectWebSocket]);
 
   useEffect(() => {
     if (!selectedWorkflow) return;
@@ -513,29 +614,6 @@ function App() {
     return null;
   };
 
-  const extractHistoryImages = (historyEntry) => {
-    const outputs = historyEntry?.outputs || {};
-    const imageUrls = [];
-
-    Object.values(outputs).forEach((output) => {
-      const outputImages = output?.images || output?.gifs || output?.videos;
-      if (!Array.isArray(outputImages)) {
-        return;
-      }
-      outputImages.forEach((image) => {
-        if (!image) return;
-        if (typeof image === 'string') {
-          imageUrls.push(getViewUrl(image));
-          return;
-        }
-        if (!image.filename) return;
-        imageUrls.push(getViewUrl(image.filename, image.subfolder || '', image.type || 'output'));
-      });
-    });
-
-    return imageUrls;
-  };
-
   const appendHistoryEntry = async (entry) => {
     try {
       await saveCozyHistoryItem(entry);
@@ -553,6 +631,9 @@ function App() {
     }
 
     try {
+        const runId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
         const queueWarningThreshold = 10;
         try {
           const queueData = await getQueue();
@@ -706,6 +787,9 @@ function App() {
             if(node.class_type === "CozyGenMetaText") {
                 node.inputs.value = metaTextLines.join("\n");
             }
+            if (node.class_type === "CozyGenOutput" || node.class_type === "CozyGenVideoOutput") {
+                node.inputs.run_id = runId;
+            }
         }
 
         const promptPayload = { prompt: finalWorkflow };
@@ -714,6 +798,13 @@ function App() {
         if (promptId) {
           const promptIdString = String(promptId);
           localStorage.setItem('lastPromptId', promptIdString);
+          saveCozySession({
+            id: promptIdString,
+            status: 'queued',
+            workflow: selectedWorkflow,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).catch(() => {});
           appendHistoryEntry({
             id: promptIdString,
             timestamp: new Date().toISOString(),
@@ -734,76 +825,6 @@ function App() {
         console.error("Failed to queue prompt:", error);
         setIsLoading(false);
         setStatusText('Error queuing prompt');
-    }
-  };
-
-  const handleResumeSession = async () => {
-    const lastPromptId = localStorage.getItem('lastPromptId');
-    if (!lastPromptId) {
-      alert('No previous session found to resume.');
-      return;
-    }
-
-    setStatusText('Checking queue...');
-
-    try {
-      let queueData = null;
-      let queueFetchSucceeded = false;
-      try {
-        queueData = await getQueue();
-        queueFetchSucceeded = true;
-      } catch (error) {
-        console.warn('CozyGen: failed to read queue, checking history instead.', error);
-      }
-
-      const queueRunning = Array.isArray(queueData?.queue_running) ? queueData.queue_running : [];
-      const queuePending = Array.isArray(queueData?.queue_pending) ? queueData.queue_pending : [];
-      const allQueueItems = queueData && Array.isArray(queueData) ? queueData : [...queueRunning, ...queuePending];
-      const activePromptIds = new Set(allQueueItems.map(extractPromptId).filter(Boolean));
-
-      if (activePromptIds.has(lastPromptId)) {
-        setIsLoading(true);
-        setStatusText('Resuming prompt...');
-        if (!websocketRef.current || websocketRef.current.readyState === WebSocket.CLOSED) {
-          connectWebSocket();
-        }
-        return;
-      }
-
-      if (!queueFetchSucceeded) {
-        const historyData = await getHistory(lastPromptId);
-        const historyEntry = historyData?.[lastPromptId] || historyData?.history?.[lastPromptId];
-
-        if (!historyEntry) {
-          alert('Previous session has expired or is no longer available.');
-          localStorage.removeItem('lastPromptId');
-          return;
-        }
-
-        const imageUrls = extractHistoryImages(historyEntry);
-        if (imageUrls.length === 0) {
-          alert('Previous session completed, but no images were found.');
-          localStorage.removeItem('lastPromptId');
-          return;
-        }
-
-        setPreviewImages(imageUrls);
-        localStorage.setItem('lastPreviewImages', JSON.stringify(imageUrls));
-        setIsLoading(false);
-        setProgressValue(0);
-        setProgressMax(0);
-        setStatusText('Finished');
-        return;
-      }
-
-      setIsLoading(true);
-      setStatusText('Resuming prompt...');
-      if (!websocketRef.current || websocketRef.current.readyState === WebSocket.CLOSED) {
-        connectWebSocket();
-      }
-    } catch (error) {
-      console.error('Failed to resume session:', error);
-      alert('Unable to resume the previous session. Please try again.');
     }
   };
 
@@ -859,14 +880,6 @@ function App() {
                   selectedWorkflow={selectedWorkflow}
                   onSelect={handleWorkflowSelect}
                 />
-                <button
-                  onClick={handleResumeSession}
-                  disabled={isLoading}
-                  className="w-full px-4 py-2 bg-base-300 text-white rounded-lg hover:bg-base-300/80 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  Resume Session
-                </button>
-
                 {/* Render ImageInput separately */}
                 {dynamicInputs.filter(input => input.class_type === 'CozyGenImageInput').map(input => (
                     <ImageInput

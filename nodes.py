@@ -138,12 +138,15 @@ class CozyGenOutput(SaveImage):
             "optional": {
                 "filename_prefix": (IO.STRING, {"default": "CozyGen/output"}),
             },
+            "hidden": {
+                "run_id": (IO.STRING, {"default": ""}),
+            },
         }
 
     FUNCTION = "save_images"
     CATEGORY = "CozyGen"
 
-    def save_images(self, images, filename_prefix="CozyGen/output"):
+    def save_images(self, images, filename_prefix="CozyGen/output", run_id=""):
         results = super().save_images(images, filename_prefix)
         server_instance = server.PromptServer.instance
 
@@ -188,6 +191,9 @@ class CozyGenVideoOutput:
                 "format": (["video/webm", "video/mp4", "image/gif"],),
                 "pingpong": (IO.BOOLEAN, {"default": False}),
             },
+            "hidden": {
+                "run_id": (IO.STRING, {"default": ""}),
+            },
         }
 
     RETURN_TYPES = ()
@@ -196,7 +202,7 @@ class CozyGenVideoOutput:
 
     CATEGORY = "CozyGen"
 
-    def save_video(self, images, frame_rate, loop_count, filename_prefix="CozyGen/video", format="video/webm", pingpong=False):
+    def save_video(self, images, frame_rate, loop_count, filename_prefix="CozyGen/video", format="video/webm", pingpong=False, run_id=""):
         filename_prefix += self.prefix_append
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(filename_prefix, self.output_dir, images[0].shape[1], images[0].shape[0])
         results = list()
