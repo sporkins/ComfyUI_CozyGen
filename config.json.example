@@ -1,3 +1,4 @@
 {
-  "workflows_dir": "C:\\Users\\YourName\\Documents\\CozyGenWorkflows"
+  "workflows_dir": "C:\\Users\\YourName\\Documents\\CozyGenWorkflows",
+  "cache_dir": "C:\\Users\\YourName\\Documents\\CozyGenCache"
 }

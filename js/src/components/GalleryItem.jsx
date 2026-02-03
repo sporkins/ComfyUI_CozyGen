@@ -1,11 +1,15 @@
 import React from 'react';
+import LazyMedia from './LazyMedia';
+import { getThumbUrl, getViewUrl } from '../api';
 
 const isVideo = (filename) => /\.(mp4|webm)$/i.test(filename);
+const isGif = (filename) => /\.(gif)$/i.test(filename);
 const isAudio = (filename) => /\.(mp3|wav|flac)$/i.test(filename);
 
 const GalleryItem = ({ item, onSelect }) => {
     const isDirectory = item.type === 'directory';
-    const fileUrl = isDirectory ? '' : `/view?filename=${item.filename}&subfolder=${item.subfolder}&type=output`;
+    const fileUrl = isDirectory ? '' : getViewUrl(item.filename, item.subfolder, 'output');
+    const thumbUrl = isDirectory ? '' : getThumbUrl(item.filename, item.subfolder, 'output', { w: 384, q: 45, fmt: 'webp' });
 
     const renderContent = () => {
         if (isDirectory) {
@@ -15,7 +19,14 @@ const GalleryItem = ({ item, onSelect }) => {
                 </div>
             );
         } else if (isVideo(item.filename)) {
-            return <video src={fileUrl} muted className="w-full h-full object-cover" />;
+            return (
+                <LazyMedia
+                    type="video"
+                    src={fileUrl}
+                    className="w-full h-full object-cover"
+                    rootMargin="300px"
+                />
+            );
         } else if (isAudio(item.filename)) {
             return (
                 <div className="flex flex-col items-center justify-center h-full bg-base-300/50">
@@ -23,7 +34,17 @@ const GalleryItem = ({ item, onSelect }) => {
                 </div>
             );
         } else {
-            return <img src={fileUrl} alt={item.filename} className="w-full h-full object-cover" />;
+            const isAnimatedGif = isGif(item.filename);
+            return (
+                <LazyMedia
+                    type="image"
+                    src={isAnimatedGif ? fileUrl : (thumbUrl || fileUrl)}
+                    fallbackSrc={fileUrl}
+                    alt={item.filename}
+                    className="w-full h-full object-cover"
+                    rootMargin="300px"
+                />
+            );
         }
     };
 

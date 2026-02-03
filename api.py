@@ -1,13 +1,17 @@
 from aiohttp import web
 import os
 import json
+import io
+import functools
 import folder_paths
-from PIL import Image
+from PIL import Image, ImageOps
 import server # Import server for node_info
 import uuid # For generating unique filenames
+import re
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_WORKFLOWS_DIR = os.path.join(MODULE_DIR, "workflows")
+DEFAULT_WORKFLOWS_DIR = os.path.join(MODULE_DIR, ".workflows")
+DEFAULT_CACHE_DIR = os.path.join(MODULE_DIR, ".cache")
 CONFIG_FILENAME = "config.json"
 
 def get_config() -> dict:
@@ -30,6 +34,116 @@ def get_workflows_dir() -> str:
     if not os.path.isabs(resolved):
         resolved = os.path.normpath(os.path.join(MODULE_DIR, resolved))
     return resolved
+
+def get_cache_dir() -> str:
+    config = get_config()
+    cache_dir = config.get("cache_dir")
+    if not cache_dir:
+        return DEFAULT_CACHE_DIR
+    resolved = os.path.expandvars(os.path.expanduser(str(cache_dir)))
+    if not os.path.isabs(resolved):
+        resolved = os.path.normpath(os.path.join(MODULE_DIR, resolved))
+    return resolved
+
+def get_base_dir_for_type(file_type: str) -> str | None:
+    if file_type == "output":
+        return folder_paths.get_output_directory()
+    if file_type == "input":
+        return folder_paths.get_input_directory()
+    if file_type == "temp":
+        get_temp = getattr(folder_paths, "get_temp_directory", None)
+        return get_temp() if callable(get_temp) else None
+    return None
+
+def normalize_media_path(base_dir: str, subfolder: str, filename: str) -> str | None:
+    if not base_dir:
+        return None
+    base_dir = os.path.normpath(base_dir)
+    target_path = os.path.normpath(os.path.join(base_dir, subfolder, filename))
+    try:
+        base_cmp = os.path.normcase(base_dir)
+        target_cmp = os.path.normcase(target_path)
+        if os.path.commonpath([base_cmp, target_cmp]) != base_cmp:
+            return None
+    except Exception:
+        return None
+    return target_path
+
+def get_history_dir() -> str:
+    history_dir = os.path.join(get_cache_dir(), "history")
+    os.makedirs(history_dir, exist_ok=True)
+    return history_dir
+
+def sanitize_history_id(history_id: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9._-]', '_', history_id or '')
+
+def history_path_for_id(history_id: str) -> str:
+    safe_id = sanitize_history_id(history_id)
+    return os.path.join(get_history_dir(), f"{safe_id}.json")
+
+def load_history_entry(history_id: str):
+    path = history_path_for_id(history_id)
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def write_history_entry(history_id: str, data: dict):
+    path = history_path_for_id(history_id)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+
+def list_history_entries():
+    history_dir = get_history_dir()
+    entries = []
+    for name in os.listdir(history_dir):
+        if not name.endswith('.json'):
+            continue
+        path = os.path.join(history_dir, name)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            entries.append(data)
+        except Exception:
+            continue
+    entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+    return entries
+
+@functools.lru_cache(maxsize=256)
+def build_thumbnail_bytes(path: str, mtime: float, size: int, width: int, quality: int, fmt: str):
+    with Image.open(path) as img:
+        img = ImageOps.exif_transpose(img)
+        if getattr(img, "is_animated", False):
+            try:
+                img.seek(0)
+            except Exception:
+                pass
+
+        if width and img.width > width:
+            target_height = max(1, int((img.height / img.width) * width))
+            img = img.resize((width, target_height), resample=Image.LANCZOS)
+
+        if fmt == "webp":
+            try:
+                buffer = io.BytesIO()
+                img.save(buffer, format="WEBP", quality=quality, method=4)
+                return buffer.getvalue(), "image/webp"
+            except Exception:
+                fmt = "jpeg"
+
+        if fmt in ("jpeg", "jpg"):
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=quality, optimize=True)
+            return buffer.getvalue(), "image/jpeg"
+
+        if fmt == "png":
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG", optimize=True)
+            return buffer.getvalue(), "image/png"
+
+    raise ValueError("Unsupported format")
 
 async def get_hello(request: web.Request) -> web.Response:
     return web.json_response({"status": "success", "message": "Hello from the CozyGen API!"})
@@ -128,6 +242,99 @@ async def upload_image(request: web.Request) -> web.Response:
 
     return web.json_response({"filename": unique_filename, "size": size})
 
+async def get_thumbnail(request: web.Request) -> web.Response:
+    filename = request.rel_url.query.get('filename', '')
+    subfolder = request.rel_url.query.get('subfolder', '')
+    file_type = request.rel_url.query.get('type', 'output')
+    width_param = request.rel_url.query.get('w', '256')
+    quality_param = request.rel_url.query.get('q', '55')
+    fmt = (request.rel_url.query.get('fmt', 'webp') or 'webp').lower()
+
+    if not filename:
+        return web.json_response({"error": "Missing 'filename' query parameter"}, status=400)
+    if not filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
+        return web.json_response({"error": "Unsupported media type"}, status=415)
+
+    try:
+        width = int(width_param)
+        quality = int(quality_param)
+    except ValueError:
+        return web.json_response({"error": "Invalid thumbnail parameters"}, status=400)
+
+    width = max(32, min(1024, width))
+    quality = max(20, min(90, quality))
+    if fmt not in ("webp", "jpeg", "jpg", "png"):
+        fmt = "jpeg"
+
+    base_dir = get_base_dir_for_type(file_type)
+    file_path = normalize_media_path(base_dir, subfolder, filename)
+    if not file_path:
+        return web.json_response({"error": "Unauthorized path"}, status=403)
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+        return web.json_response({"error": "File not found"}, status=404)
+
+    try:
+        stat = os.stat(file_path)
+        thumb_bytes, content_type = build_thumbnail_bytes(
+            file_path,
+            stat.st_mtime,
+            stat.st_size,
+            width,
+            quality,
+            fmt
+        )
+        return web.Response(
+            body=thumb_bytes,
+            content_type=content_type,
+            headers={"Cache-Control": "public, max-age=3600"}
+        )
+    except Exception as e:
+        return web.json_response({"error": f"Thumbnail generation failed: {e}"}, status=500)
+
+async def get_history_list(request: web.Request) -> web.Response:
+    items = list_history_entries()
+    return web.json_response({"items": items})
+
+async def get_history_item(request: web.Request) -> web.Response:
+    history_id = request.match_info.get('history_id', '')
+    if not history_id:
+        return web.json_response({"error": "Missing history id"}, status=400)
+    data = load_history_entry(history_id)
+    if not data:
+        return web.json_response({"error": "History item not found"}, status=404)
+    return web.json_response(data)
+
+async def save_history_item(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    history_id = payload.get("id")
+    if not history_id:
+        return web.json_response({"error": "Missing 'id' in payload"}, status=400)
+
+    existing = load_history_entry(history_id) or {}
+    merged = {**existing, **payload}
+    write_history_entry(history_id, merged)
+    return web.json_response({"status": "ok"})
+
+async def update_history_item(request: web.Request) -> web.Response:
+    history_id = request.match_info.get('history_id', '')
+    if not history_id:
+        return web.json_response({"error": "Missing history id"}, status=400)
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    existing = load_history_entry(history_id)
+    if not existing:
+        return web.json_response({"error": "History item not found"}, status=404)
+    merged = {**existing, **payload}
+    write_history_entry(history_id, merged)
+    return web.json_response({"status": "ok"})
+
 async def upload_workflow_file(request: web.Request) -> web.Response:
     filename = request.match_info.get('filename', 'workflow.json')
     workflows_dir = get_workflows_dir()
@@ -214,6 +421,11 @@ async def get_choices(request: web.Request) -> web.Response:
 routes = [
     web.get('/cozygen/hello', get_hello),
     web.get('/cozygen/gallery', get_gallery_files),
+    web.get('/cozygen/thumb', get_thumbnail),
+    web.get('/cozygen/history', get_history_list),
+    web.get('/cozygen/history/{history_id}', get_history_item),
+    web.post('/cozygen/history', save_history_item),
+    web.post('/cozygen/history/{history_id}', update_history_item),
     web.post('/cozygen/upload_image', upload_image),
     web.get('/cozygen/workflows', get_workflow_list),
     web.get('/cozygen/workflows/{filename}', get_workflow_file),

@@ -50,6 +50,7 @@ CozyGen is a custom node for ComfyUI that provides a sleek, mobile-friendly web 
 *   **Real-time Previews:** Get instant visual feedback with real-time previews of your generated images directly in the web interface.
 *   **Persistent Sessions:** Your selected workflow, input values, and even the last generated image are remembered across browser sessions.
 *   **Image Gallery:** Browse, view, and manage all your previously generated images, complete with extracted prompt and seed metadata.
+*   **Shared History:** CozyGen stores generation history on the server (configurable cache directory) so it can be shared across devices.
 *   **Randomization:** Easily randomize numerical inputs like seeds with a dedicated toggle.
 *   **Seamless Integration:** Works directly with your existing ComfyUI setup, leveraging its core functionalities.
 
@@ -120,10 +121,11 @@ In ComfyUI, create or open a workflow that you want to control remotely. For eac
 *   Configure the `CozyGenDynamicInput` node's properties (e.g., `param_name`, `param_type`, `default_value`, `min_value`, `max_value`, `add_randomize_toggle`).
 *   Add a `CozyGenOutput` node at the end of your workflow to save the generated image and send real-time previews to the web UI.
 *   *IMPORTANT* When exporting your workflow, export with API into the `ComfyUI_CozyGen/workflows/` directory (or whatever you set in `config.json`).
-    * To store workflows outside this repo, copy `config.json.example` to `config.json` and set `workflows_dir` to an absolute path (or a relative path from this folder). Example:
+    * To store workflows outside this repo, copy `config.json.example` to `config.json` and set `workflows_dir` to an absolute path (or a relative path from this folder). You can also set `cache_dir` to control where CozyGen stores shared history (defaults to `.cache`). Example:
       ```json
       {
-        "workflows_dir": "C:\\Users\\YourName\\Documents\\CozyGenWorkflows"
+        "workflows_dir": "C:\\Users\\YourName\\Documents\\CozyGenWorkflows",
+        "cache_dir": "C:\\Users\\YourName\\Documents\\CozyGenCache"
       }
       ```
 

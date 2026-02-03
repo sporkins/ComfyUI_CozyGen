@@ -70,14 +70,82 @@ export const getHistory = async (promptId) => {
   return response.json();
 };
 
-export const getViewUrl = (filename, subfolder = '', type = 'output') => {
+export const getCozyHistoryList = async () => {
+  const response = await fetch(`${BASE_URL}/history`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch CozyGen history list');
+  }
+  return response.json();
+};
+
+export const getCozyHistoryItem = async (historyId) => {
+  const response = await fetch(`${BASE_URL}/history/${historyId}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch CozyGen history item: ${historyId}`);
+  }
+  return response.json();
+};
+
+export const saveCozyHistoryItem = async (payload) => {
+  const response = await fetch(`${BASE_URL}/history`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to save CozyGen history item');
+  }
+  return response.json();
+};
+
+export const updateCozyHistoryItem = async (historyId, payload) => {
+  const response = await fetch(`${BASE_URL}/history/${historyId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to update CozyGen history item');
+  }
+  return response.json();
+};
+
+export const getViewUrl = (filename, subfolder = '', type = 'output', options = {}) => {
   const baseUrl = window.location.protocol + '//' + window.location.host;
   const params = new URLSearchParams({
     filename,
     subfolder,
     type,
   });
+  if (options && typeof options === 'object') {
+    Object.entries(options).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+  }
   return `${baseUrl}/view?${params.toString()}`;
+};
+
+export const getThumbUrl = (filename, subfolder = '', type = 'output', options = {}) => {
+  const baseUrl = window.location.protocol + '//' + window.location.host;
+  const params = new URLSearchParams({
+    filename,
+    subfolder,
+    type,
+  });
+  if (options && typeof options === 'object') {
+    Object.entries(options).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+  }
+  return `${baseUrl}/cozygen/thumb?${params.toString()}`;
 };
 
 export const getObjectInfo = async () => {

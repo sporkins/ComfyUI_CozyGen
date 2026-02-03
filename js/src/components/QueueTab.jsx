@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { deleteQueueItem, getQueue, interruptQueue, queuePrompt } from '../api';
+import { deleteQueueItem, getQueue, interruptQueue, queuePrompt, getCozyHistoryList } from '../api';
 
-const HISTORY_KEY = 'history';
 const POLL_INTERVAL_MS = 5000;
 
 const extractPromptId = (item) => {
@@ -32,14 +31,24 @@ const QueueTab = () => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
-  const historyById = useMemo(() => {
-    const storedHistory = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-    return storedHistory.reduce((acc, item) => {
-      if (item?.id) {
-        acc[item.id] = item;
+  const [historyById, setHistoryById] = useState({});
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const data = await getCozyHistoryList();
+        const map = (data.items || []).reduce((acc, item) => {
+          if (item?.id) {
+            acc[item.id] = item;
+          }
+          return acc;
+        }, {});
+        setHistoryById(map);
+      } catch (error) {
+        console.warn('CozyGen: failed to load history list', error);
       }
-      return acc;
-    }, {});
+    };
+    loadHistory();
   }, []);
 
   const fetchQueue = useCallback(async () => {

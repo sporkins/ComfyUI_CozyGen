@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import WorkflowSelector from '../components/WorkflowSelector';
 import DynamicForm from '../components/DynamicForm';
 import ImageInput from '../components/ImageInput'; // Import ImageInput
-import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getHistory, getViewUrl, getObjectInfo } from '../api';
+import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getHistory, getViewUrl, getObjectInfo, saveCozyHistoryItem, updateCozyHistoryItem } from '../api';
 import Modal from 'react-modal';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 
@@ -101,7 +101,6 @@ const WANVIDEO_QUANTIZATIONS = [
   "fp8_e5m2_scaled_fast",
 ];
 const WANVIDEO_LOAD_DEVICES = ["main_device", "offload_device"];
-const HISTORY_KEY = 'history';
 const HISTORY_SELECTION_KEY = 'historySelection';
 const COZYGEN_INPUT_TYPES = [
     'CozyGenDynamicInput', 
@@ -366,7 +365,7 @@ function App() {
 
       const msg = JSON.parse(event.data);
 
-      if (msg.type === 'cozygen_batch_ready') {
+        if (msg.type === 'cozygen_batch_ready') {
           const imageUrls = msg.data.images.map(image => image.url);
           if (imageUrls.length > 0) {
               setPreviewImages(imageUrls);
@@ -376,6 +375,12 @@ function App() {
           setProgressValue(0);
           setProgressMax(0);
           setStatusText('Finished');
+          const lastPromptId = localStorage.getItem('lastPromptId');
+          if (lastPromptId && imageUrls.length > 0) {
+            updateCozyHistoryItem(lastPromptId, { preview_images: imageUrls }).catch((error) => {
+              console.warn('CozyGen: failed to update history previews', error);
+            });
+          }
       } else if (msg.type === 'executing') {
           const nodeId = msg.data.node;
           // If nodeId is null, it means the prompt is finished, but we wait for our own message.
@@ -531,13 +536,12 @@ function App() {
     return imageUrls;
   };
 
-  const appendHistoryEntry = (entry) => {
-    const existingHistory = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-    const updatedHistory = [...existingHistory, entry];
-    if (updatedHistory.length > 100) {
-      updatedHistory.splice(0, updatedHistory.length - 100);
+  const appendHistoryEntry = async (entry) => {
+    try {
+      await saveCozyHistoryItem(entry);
+    } catch (error) {
+      console.warn('CozyGen: failed to save history item', error);
     }
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
   };
 
   const handleGenerate = async (clear = true) => {

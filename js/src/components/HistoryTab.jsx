@@ -1,15 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getHistory, getViewUrl } from '../api';
+import { getHistory, getThumbUrl, getViewUrl, getCozyHistoryList } from '../api';
+import LazyMedia from './LazyMedia';
 
-const HISTORY_KEY = 'history';
 const HISTORY_SELECTION_KEY = 'historySelection';
 
 const isVideo = (url) => /\.(mp4|webm)/i.test(url);
+const isGif = (url) => /\.(gif)/i.test(url);
 
 const extractHistoryMedia = (historyEntry) => {
   const outputs = historyEntry?.outputs || {};
-  const mediaUrls = [];
+  const mediaItems = [];
 
   Object.values(outputs).forEach((output) => {
     const outputImages = output?.images || output?.gifs || output?.videos;
@@ -19,15 +20,23 @@ const extractHistoryMedia = (historyEntry) => {
     outputImages.forEach((image) => {
       if (!image) return;
       if (typeof image === 'string') {
-        mediaUrls.push(getViewUrl(image));
+        mediaItems.push({
+          filename: image,
+          subfolder: '',
+          type: 'output',
+        });
         return;
       }
       if (!image.filename) return;
-      mediaUrls.push(getViewUrl(image.filename, image.subfolder || '', image.type || 'output'));
+      mediaItems.push({
+        filename: image.filename,
+        subfolder: image.subfolder || '',
+        type: image.type || 'output',
+      });
     });
   });
 
-  return mediaUrls;
+  return mediaItems;
 };
 
 const HistoryTab = () => {
@@ -36,19 +45,17 @@ const HistoryTab = () => {
   const [historyOutputs, setHistoryOutputs] = useState({});
 
   useEffect(() => {
-    const loadHistory = () => {
-      const storedHistory = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-      setHistoryItems(storedHistory);
+    const loadHistory = async () => {
+      try {
+        const data = await getCozyHistoryList();
+        setHistoryItems(data.items || []);
+      } catch (error) {
+        console.warn('CozyGen: failed to load history list', error);
+        setHistoryItems([]);
+      }
     };
 
     loadHistory();
-    const handleStorage = (event) => {
-      if (event.key === HISTORY_KEY) {
-        loadHistory();
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
   useEffect(() => {
@@ -61,6 +68,7 @@ const HistoryTab = () => {
       await Promise.all(historyItems.map(async (item) => {
         if (!item?.id) return;
         if (historyOutputs[item.id]) return;
+        if (Array.isArray(item.preview_images) && item.preview_images.length > 0) return;
         try {
           const historyData = await getHistory(item.id);
           const historyEntry = historyData?.[item.id] || historyData?.history?.[item.id];
@@ -99,7 +107,8 @@ const HistoryTab = () => {
     <div className="space-y-4 pb-8">
       {sortedHistoryItems.map((item) => {
         const historyEntry = historyOutputs[item.id];
-        const mediaUrls = extractHistoryMedia(historyEntry);
+        const mediaItems = extractHistoryMedia(historyEntry);
+        const previewUrls = Array.isArray(item.preview_images) ? item.preview_images : [];
         const timestamp = item.timestamp ? new Date(item.timestamp) : null;
 
         return (
@@ -117,22 +126,66 @@ const HistoryTab = () => {
                 {timestamp ? timestamp.toLocaleString() : 'Unknown time'}
               </div>
             </div>
-            {mediaUrls.length === 0 && (
+            {mediaItems.length === 0 && previewUrls.length === 0 && (
               <p className="text-sm text-gray-400">
                 {historyEntry ? 'No previews found for this prompt.' : 'Loading previews...'}
               </p>
             )}
-            {mediaUrls.length > 0 && (
+            {previewUrls.length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                {mediaUrls.map((url, index) => (
+                {previewUrls.map((url, index) => {
+                  const isVideoFile = isVideo(url);
+                  return (
+                    <div key={`${item.id}-preview-${index}`} className="aspect-square bg-base-300 rounded-lg overflow-hidden">
+                      {isVideoFile ? (
+                        <LazyMedia
+                          type="video"
+                          src={url}
+                          className="w-full h-full object-cover"
+                          rootMargin="300px"
+                        />
+                      ) : (
+                        <LazyMedia
+                          type="image"
+                          src={url}
+                          alt="History preview"
+                          className="w-full h-full object-cover"
+                          rootMargin="300px"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {previewUrls.length === 0 && mediaItems.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                {mediaItems.map((media, index) => {
+                  const isVideoFile = isVideo(media.filename);
+                  const isGifFile = isGif(media.filename);
+                  const fullUrl = getViewUrl(media.filename, media.subfolder, media.type);
+                  const thumbUrl = getThumbUrl(media.filename, media.subfolder, media.type, { w: 256, q: 45, fmt: 'webp' });
+                  return (
                   <div key={`${item.id}-${index}`} className="aspect-square bg-base-300 rounded-lg overflow-hidden">
-                    {isVideo(url) ? (
-                      <video src={url} muted loop className="w-full h-full object-cover" />
+                    {isVideoFile ? (
+                      <LazyMedia
+                        type="video"
+                        src={fullUrl}
+                        className="w-full h-full object-cover"
+                        rootMargin="300px"
+                      />
                     ) : (
-                      <img src={url} alt="History preview" className="w-full h-full object-cover" />
+                      <LazyMedia
+                        type="image"
+                        src={isGifFile ? fullUrl : (thumbUrl || fullUrl)}
+                        fallbackSrc={fullUrl}
+                        alt="History preview"
+                        className="w-full h-full object-cover"
+                        rootMargin="300px"
+                      />
                     )}
                   </div>
-                ))}
+                )})}
               </div>
             )}
           </div>

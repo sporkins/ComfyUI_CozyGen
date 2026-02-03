@@ -41,3 +41,5 @@ node_modules/
 
 /workflows/*
 config.json
+.cache/
+.workflows/
