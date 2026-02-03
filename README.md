@@ -119,7 +119,13 @@ In ComfyUI, create or open a workflow that you want to control remotely. For eac
 *   Add a `CozyGenDynamicInput` node and connect its output to the desired input on another node.
 *   Configure the `CozyGenDynamicInput` node's properties (e.g., `param_name`, `param_type`, `default_value`, `min_value`, `max_value`, `add_randomize_toggle`).
 *   Add a `CozyGenOutput` node at the end of your workflow to save the generated image and send real-time previews to the web UI.
-*   *IMPORTANT* When exporting your workflow, export with API into the `ComfyUI_CozyGen/workflows/` directory.
+*   *IMPORTANT* When exporting your workflow, export with API into the `ComfyUI_CozyGen/workflows/` directory (or whatever you set in `config.json`).
+    * To store workflows outside this repo, copy `config.json.example` to `config.json` and set `workflows_dir` to an absolute path (or a relative path from this folder). Example:
+      ```json
+      {
+        "workflows_dir": "C:\\Users\\YourName\\Documents\\CozyGenWorkflows"
+      }
+      ```
 
 *   Some dropdown menus may not automatically populate if the model folder is not a default. Use the choice_type widget to point to the correct models subfolder using its name (ex: loras)
 

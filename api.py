@@ -6,6 +6,31 @@ from PIL import Image
 import server # Import server for node_info
 import uuid # For generating unique filenames
 
+MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_WORKFLOWS_DIR = os.path.join(MODULE_DIR, "workflows")
+CONFIG_FILENAME = "config.json"
+
+def get_config() -> dict:
+    config_path = os.path.join(MODULE_DIR, CONFIG_FILENAME)
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def get_workflows_dir() -> str:
+    config = get_config()
+    workflows_dir = config.get("workflows_dir")
+    if not workflows_dir:
+        return DEFAULT_WORKFLOWS_DIR
+    resolved = os.path.expandvars(os.path.expanduser(str(workflows_dir)))
+    if not os.path.isabs(resolved):
+        resolved = os.path.normpath(os.path.join(MODULE_DIR, resolved))
+    return resolved
+
 async def get_hello(request: web.Request) -> web.Response:
     return web.json_response({"status": "success", "message": "Hello from the CozyGen API!"})
 
@@ -105,7 +130,8 @@ async def upload_image(request: web.Request) -> web.Response:
 
 async def upload_workflow_file(request: web.Request) -> web.Response:
     filename = request.match_info.get('filename', 'workflow.json')
-    workflows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workflows")
+    workflows_dir = get_workflows_dir()
+    os.makedirs(workflows_dir, exist_ok=True)
     workflow_path = os.path.join(workflows_dir, filename)
     
     workflow = await request.json()
@@ -117,7 +143,7 @@ async def upload_workflow_file(request: web.Request) -> web.Response:
     
 
 async def get_workflow_list(request: web.Request) -> web.Response:
-    workflows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workflows")
+    workflows_dir = get_workflows_dir()
     if not os.path.exists(workflows_dir):
         return web.json_response({"error": "Workflows directory not found"}, status=404)
     
@@ -126,7 +152,7 @@ async def get_workflow_list(request: web.Request) -> web.Response:
 
 async def get_workflow_file(request: web.Request) -> web.Response:
     filename = request.match_info.get('filename', '')
-    workflows_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workflows")
+    workflows_dir = get_workflows_dir()
     workflow_path = os.path.join(workflows_dir, filename)
 
     if not os.path.exists(workflow_path):
