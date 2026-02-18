@@ -6,6 +6,7 @@ from PIL import Image, ImageOps
 from PIL.PngImagePlugin import PngInfo
 import base64 # New import
 import io # New import
+from urllib.parse import parse_qs, urlparse
 
 import folder_paths
 from nodes import SaveImage, LoadImage
@@ -249,6 +250,118 @@ class CozyGenVideoOutput:
 
         return { "ui": { "videos": results } }
 
+class CozyGenVideoPreviewOutput:
+    def __init__(self):
+        self.output_dir = folder_paths.get_output_directory()
+        get_temp = getattr(folder_paths, "get_temp_directory", None)
+        self.temp_dir = get_temp() if callable(get_temp) else None
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "video_path": (IO.STRING, {"default": ""}),
+            },
+            "hidden": {
+                "run_id": (IO.STRING, {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "preview_video"
+    OUTPUT_NODE = True
+    CATEGORY = "CozyGen"
+
+    def _normalize_view_payload(self, video_path):
+        if not video_path:
+            return None
+
+        raw = str(video_path).strip()
+        if not raw:
+            return None
+
+        # Allow users to pass a /view URL directly.
+        if raw.startswith("/view?") or "/view?" in raw:
+            query = urlparse(raw).query if "?" in raw else raw.split("?", 1)[1]
+            parsed = parse_qs(query)
+            filename = (parsed.get("filename", [""])[0] or "").strip()
+            if not filename:
+                return None
+            return {
+                "filename": filename,
+                "subfolder": (parsed.get("subfolder", [""])[0] or "").strip(),
+                "type": (parsed.get("type", ["output"])[0] or "output").strip(),
+            }
+
+        norm = os.path.normpath(raw)
+        base_checks = []
+        if self.output_dir:
+            base_checks.append(("output", os.path.normpath(self.output_dir)))
+        if self.temp_dir:
+            base_checks.append(("temp", os.path.normpath(self.temp_dir)))
+
+        # Absolute path from nodes like VHS_SelectFilename.
+        if os.path.isabs(norm):
+            for media_type, base_dir in base_checks:
+                try:
+                    if os.path.commonpath([norm, base_dir]) == base_dir:
+                        rel = os.path.relpath(norm, base_dir)
+                        subfolder, filename = os.path.split(rel)
+                        return {
+                            "filename": filename,
+                            "subfolder": subfolder.replace("\\", "/"),
+                            "type": media_type,
+                        }
+                except ValueError:
+                    continue
+
+        # Relative path support: try output then temp.
+        candidate_rel = norm.lstrip("\\/").replace("\\", "/")
+        for media_type, base_dir in base_checks:
+            candidate_abs = os.path.normpath(os.path.join(base_dir, candidate_rel))
+            try:
+                if os.path.commonpath([candidate_abs, base_dir]) == base_dir and os.path.exists(candidate_abs):
+                    subfolder, filename = os.path.split(candidate_rel)
+                    return {
+                        "filename": filename,
+                        "subfolder": subfolder.replace("\\", "/"),
+                        "type": media_type,
+                    }
+            except ValueError:
+                continue
+
+        # Final fallback: treat input as a plain output filename.
+        subfolder, filename = os.path.split(candidate_rel)
+        if not filename:
+            return None
+        return {
+            "filename": filename,
+            "subfolder": subfolder.replace("\\", "/"),
+            "type": "output",
+        }
+
+    def preview_video(self, video_path, run_id=""):
+        payload = self._normalize_view_payload(video_path)
+        if not payload:
+            print(f"CozyGen: CozyGenVideoPreviewOutput could not parse video_path='{video_path}'")
+            return {"ui": {"videos": []}}
+
+        video_url = f"/view?filename={payload['filename']}&subfolder={payload['subfolder']}&type={payload['type']}"
+        message_data = {
+            "status": "video_generated",
+            "video_url": video_url,
+            "filename": payload["filename"],
+            "subfolder": payload["subfolder"],
+            "type": payload["type"],
+        }
+
+        server_instance = server.PromptServer.instance
+        if server_instance:
+            server_instance.send_sync("cozygen_video_ready", message_data)
+            print(f"CozyGen: Sent custom WebSocket message: {{'type': 'cozygen_video_ready', 'data': {message_data}}}")
+
+        return {"ui": {"videos": [payload]}}
+
 import comfy.samplers
 
 # Dynamically get model folder names
@@ -256,6 +369,7 @@ models_path = folder_paths.models_dir
 model_folders = sorted([d.name for d in os.scandir(models_path) if d.is_dir()])
 static_choices = ["sampler", "scheduler"]
 all_choice_types = model_folders + static_choices
+MAX_SEED_NUM = 1125899906842624
 
 class CozyGenFloatInput:
     @classmethod
@@ -298,6 +412,31 @@ class CozyGenIntInput:
     CATEGORY = "CozyGen/Static"
     def get_value(self, param_name, priority, default_value, min_value, max_value, step, add_randomize_toggle):
         return (default_value,)
+
+class CozyGenSeedInput:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "Seed"}),
+                "priority": (IO.INT, {"default": 10}),
+                "seed": (IO.INT, {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
+                "min_value": (IO.INT, {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
+                "max_value": (IO.INT, {"default": MAX_SEED_NUM, "min": 0, "max": MAX_SEED_NUM}),
+                "add_randomize_toggle": (IO.BOOLEAN, {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = (IO.INT,)
+    RETURN_NAMES = ("seed",)
+    FUNCTION = "get_value"
+    CATEGORY = "CozyGen/Static"
+
+    def get_value(self, param_name, priority, seed, min_value, max_value, add_randomize_toggle):
+        if max_value < min_value:
+            min_value, max_value = max_value, min_value
+        seed = max(min_value, min(max_value, int(seed)))
+        return (seed,)
 
 class CozyGenStringInput:
     @classmethod
@@ -593,10 +732,12 @@ class CozyGenMetaText(ComfyNodeABC):
 NODE_CLASS_MAPPINGS = {
     "CozyGenOutput": CozyGenOutput,
     "CozyGenVideoOutput": CozyGenVideoOutput,
+    "CozyGenVideoPreviewOutput": CozyGenVideoPreviewOutput,
     "CozyGenDynamicInput": CozyGenDynamicInput,
     "CozyGenImageInput": CozyGenImageInput,
     "CozyGenFloatInput": CozyGenFloatInput,
     "CozyGenIntInput": CozyGenIntInput,
+    "CozyGenSeedInput": CozyGenSeedInput,
     "CozyGenStringInput": CozyGenStringInput,
     "CozyGenChoiceInput": CozyGenChoiceInput,
     "CozyGenLoraInput": CozyGenLoraInput,
@@ -609,10 +750,12 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenOutput": "CozyGen Output",
     "CozyGenVideoOutput": "CozyGen Video Output",
+    "CozyGenVideoPreviewOutput": "CozyGen Video Preview Output",
     "CozyGenDynamicInput": "CozyGen Dynamic Input",
     "CozyGenImageInput": "CozyGen Image Input",
     "CozyGenFloatInput": "CozyGen Float Input",
     "CozyGenIntInput": "CozyGen Int Input",
+    "CozyGenSeedInput": "CozyGen Seed Input",
     "CozyGenStringInput": "CozyGen String Input",
     "CozyGenChoiceInput": "CozyGen Choice Input",
     "CozyGenLoraInput": "CozyGen Lora Input",

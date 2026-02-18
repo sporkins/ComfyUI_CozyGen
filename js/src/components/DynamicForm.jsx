@@ -6,6 +6,7 @@ import DropdownInput from './inputs/DropdownInput';
 import LoraInput from './inputs/LoraInput';
 import LoraMultiInput from './inputs/LoraMultiInput';
 import WanVideoModelInput from './inputs/WanVideoModelInput';
+import SeedInput from './inputs/SeedInput';
 
 const renderInput = (input, formData, onFormChange, randomizeState, onRandomizeToggle, bypassedState, onBypassToggle) => {
     
@@ -40,6 +41,15 @@ const renderInput = (input, formData, onFormChange, randomizeState, onRandomizeT
                         max={inputs['max_value']}
                         step={inputs['step']}
                         paramType={param_type}
+                        disabled={isBypassed}
+                    />;
+            break;
+        case 'SEED':
+            inputComponent = <SeedInput
+                        value={value}
+                        onChange={(val) => onFormChange(param_name, val)}
+                        min={inputs['min_value']}
+                        max={inputs['max_value']}
                         disabled={isBypassed}
                     />;
             break;

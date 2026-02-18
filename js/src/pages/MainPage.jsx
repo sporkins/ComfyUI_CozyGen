@@ -107,6 +107,7 @@ const COZYGEN_INPUT_TYPES = [
     'CozyGenImageInput', 
     'CozyGenFloatInput', 
     'CozyGenIntInput', 
+    'CozyGenSeedInput',
     'CozyGenStringInput',
     'CozyGenChoiceInput',
     'CozyGenLoraInput',
@@ -238,6 +239,11 @@ function App() {
           defaultValue = parseInt(defaultValue, 10);
         } else if (input.class_type === 'CozyGenFloatInput') {
           defaultValue = parseFloat(defaultValue);
+        }
+      } else if (input.class_type === 'CozyGenSeedInput') {
+        defaultValue = parseInt(input.inputs.seed, 10);
+        if (Number.isNaN(defaultValue)) {
+          defaultValue = 0;
         }
       } else if (input.class_type === 'CozyGenChoiceInput') {
         defaultValue = input.inputs.choices && input.inputs.choices.length > 0 ? input.inputs.choices[0] : '';
@@ -722,7 +728,10 @@ function App() {
 
             const nodeToUpdate = finalWorkflow[dynamicNode.id];
             if (nodeToUpdate) {
-                if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenDynamicInput'].includes(dynamicNode.class_type)) {
+                if (dynamicNode.class_type === 'CozyGenSeedInput') {
+                    const parsedSeed = Number.parseInt(valueToInject, 10);
+                    nodeToUpdate.inputs.seed = Number.isNaN(parsedSeed) ? 0 : parsedSeed;
+                } else if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenDynamicInput'].includes(dynamicNode.class_type)) {
                     nodeToUpdate.inputs.default_value = valueToInject;
                 } else if (dynamicNode.class_type === 'CozyGenChoiceInput') {
                     nodeToUpdate.inputs.value = valueToInject;
@@ -898,7 +907,7 @@ function App() {
                         .filter(input => input.class_type !== 'CozyGenImageInput')
                         .map(input => {
                             // Map new static node properties to the format DynamicForm expects
-                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenWanVideoModelSelector', 'CozyGenBoolInput'].includes(input.class_type)) {
+                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenSeedInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenWanVideoModelSelector', 'CozyGenBoolInput'].includes(input.class_type)) {
                                 let param_type = input.class_type.replace('CozyGen', '').replace('Input', '').toUpperCase();
                                 if (param_type === 'CHOICE') {
                                     param_type = 'DROPDOWN'; // Map Choice to Dropdown
