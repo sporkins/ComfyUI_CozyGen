@@ -108,6 +108,7 @@ const COZYGEN_INPUT_TYPES = [
     'CozyGenFloatInput', 
     'CozyGenIntInput', 
     'CozyGenSeedInput',
+    'CozyGenRandomNoiseInput',
     'CozyGenStringInput',
     'CozyGenChoiceInput',
     'CozyGenLoraInput',
@@ -245,8 +246,19 @@ function App() {
         if (Number.isNaN(defaultValue)) {
           defaultValue = 0;
         }
+      } else if (input.class_type === 'CozyGenRandomNoiseInput') {
+        defaultValue = parseInt(input.inputs.noise_seed, 10);
+        if (Number.isNaN(defaultValue)) {
+          defaultValue = 0;
+        }
       } else if (input.class_type === 'CozyGenChoiceInput') {
-        defaultValue = input.inputs.choices && input.inputs.choices.length > 0 ? input.inputs.choices[0] : '';
+        const choiceOptions = Array.isArray(input.inputs.choices) ? input.inputs.choices : [];
+        const configuredDefault = input.inputs.value || input.inputs.default_choice;
+        if (configuredDefault && choiceOptions.includes(configuredDefault)) {
+          defaultValue = configuredDefault;
+        } else {
+          defaultValue = choiceOptions.length > 0 ? choiceOptions[0] : '';
+        }
       } else if(input.class_type === "CozyGenLoraInput") {
         defaultValue = { lora: input.inputs.lora_value, strength: input.inputs.strength_value };
       } else if(input.class_type === "CozyGenLoraInputMulti") {
@@ -731,6 +743,9 @@ function App() {
                 if (dynamicNode.class_type === 'CozyGenSeedInput') {
                     const parsedSeed = Number.parseInt(valueToInject, 10);
                     nodeToUpdate.inputs.seed = Number.isNaN(parsedSeed) ? 0 : parsedSeed;
+                } else if (dynamicNode.class_type === 'CozyGenRandomNoiseInput') {
+                    const parsedSeed = Number.parseInt(valueToInject, 10);
+                    nodeToUpdate.inputs.noise_seed = Number.isNaN(parsedSeed) ? 0 : parsedSeed;
                 } else if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenDynamicInput'].includes(dynamicNode.class_type)) {
                     nodeToUpdate.inputs.default_value = valueToInject;
                 } else if (dynamicNode.class_type === 'CozyGenChoiceInput') {
@@ -907,10 +922,13 @@ function App() {
                         .filter(input => input.class_type !== 'CozyGenImageInput')
                         .map(input => {
                             // Map new static node properties to the format DynamicForm expects
-                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenSeedInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenWanVideoModelSelector', 'CozyGenBoolInput'].includes(input.class_type)) {
+                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenSeedInput', 'CozyGenRandomNoiseInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenWanVideoModelSelector', 'CozyGenBoolInput'].includes(input.class_type)) {
                                 let param_type = input.class_type.replace('CozyGen', '').replace('Input', '').toUpperCase();
                                 if (param_type === 'CHOICE') {
                                     param_type = 'DROPDOWN'; // Map Choice to Dropdown
+                                }
+                                if (input.class_type === 'CozyGenRandomNoiseInput') {
+                                    param_type = 'SEED';
                                 }
                                 if (param_type === 'LORAMULTI') {
                                     param_type = 'LORA_MULTI';

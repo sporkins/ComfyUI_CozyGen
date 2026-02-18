@@ -363,6 +363,7 @@ class CozyGenVideoPreviewOutput:
         return {"ui": {"videos": [payload]}}
 
 import comfy.samplers
+import comfy.sample
 
 # Dynamically get model folder names
 models_path = folder_paths.models_dir
@@ -370,6 +371,17 @@ model_folders = sorted([d.name for d in os.scandir(models_path) if d.is_dir()])
 static_choices = ["sampler", "scheduler"]
 all_choice_types = model_folders + static_choices
 MAX_SEED_NUM = 1125899906842624
+
+
+def _get_choice_values(choice_type):
+    if choice_type == "sampler":
+        return list(comfy.samplers.KSampler.SAMPLERS)
+    if choice_type == "scheduler":
+        return list(comfy.samplers.KSampler.SCHEDULERS)
+    try:
+        return list(folder_paths.get_filename_list(choice_type))
+    except KeyError:
+        return []
 
 class CozyGenFloatInput:
     @classmethod
@@ -438,6 +450,42 @@ class CozyGenSeedInput:
         seed = max(min_value, min(max_value, int(seed)))
         return (seed,)
 
+
+class _CozyGenRandomNoise:
+    def __init__(self, seed):
+        self.seed = seed
+
+    def generate_noise(self, input_latent):
+        latent_image = input_latent["samples"]
+        batch_inds = input_latent["batch_index"] if "batch_index" in input_latent else None
+        return comfy.sample.prepare_noise(latent_image, self.seed, batch_inds)
+
+
+class CozyGenRandomNoiseInput:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "Noise Seed"}),
+                "priority": (IO.INT, {"default": 10}),
+                "noise_seed": (IO.INT, {"default": 0, "min": 0, "max": MAX_SEED_NUM, "control_after_generate": True}),
+                "min_value": (IO.INT, {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
+                "max_value": (IO.INT, {"default": MAX_SEED_NUM, "min": 0, "max": MAX_SEED_NUM}),
+                "add_randomize_toggle": (IO.BOOLEAN, {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("NOISE",)
+    RETURN_NAMES = ("noise",)
+    FUNCTION = "get_noise"
+    CATEGORY = "CozyGen/Static"
+
+    def get_noise(self, param_name, priority, noise_seed, min_value, max_value, add_randomize_toggle):
+        if max_value < min_value:
+            min_value, max_value = max_value, min_value
+        seed = max(min_value, min(max_value, int(noise_seed)))
+        return (_CozyGenRandomNoise(seed),)
+
 class CozyGenStringInput:
     @classmethod
     def INPUT_TYPES(cls):
@@ -496,18 +544,15 @@ class CozyGenChoiceInput:
         # The `value` parameter comes from the frontend UI on generation.
         # If it's present, we use it. Otherwise, we use the default set in the node graph.
         final_value = value if value and value != "None" else default_choice
+        choices = _get_choice_values(choice_type)
 
-        # If the final value is still None or empty, try to get a fallback
-        if not final_value or final_value == "None":
-            if choice_type == "sampler":
-                return (comfy.samplers.KSampler.SAMPLERS[0],)
-            elif choice_type == "scheduler":
-                return (comfy.samplers.KSampler.SCHEDULERS[0],)
-            else:
-                choices = folder_paths.get_filename_list(choice_type)
-                if choices:
-                    return (choices[0],)
-        
+        # Keep final value aligned with selected choice_type.
+        if choices:
+            if not final_value or final_value == "None" or final_value not in choices:
+                return (choices[0],)
+        elif not final_value:
+            return ("None",)
+
         return (final_value,)
 
 class CozyGenLoraInput:
@@ -738,6 +783,7 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenFloatInput": CozyGenFloatInput,
     "CozyGenIntInput": CozyGenIntInput,
     "CozyGenSeedInput": CozyGenSeedInput,
+    "CozyGenRandomNoiseInput": CozyGenRandomNoiseInput,
     "CozyGenStringInput": CozyGenStringInput,
     "CozyGenChoiceInput": CozyGenChoiceInput,
     "CozyGenLoraInput": CozyGenLoraInput,
@@ -756,6 +802,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenFloatInput": "CozyGen Float Input",
     "CozyGenIntInput": "CozyGen Int Input",
     "CozyGenSeedInput": "CozyGen Seed Input",
+    "CozyGenRandomNoiseInput": "CozyGen Random Noise Input",
     "CozyGenStringInput": "CozyGen String Input",
     "CozyGenChoiceInput": "CozyGen Choice Input",
     "CozyGenLoraInput": "CozyGen Lora Input",

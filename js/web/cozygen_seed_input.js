@@ -3,7 +3,7 @@ import { api } from "../../scripts/api.js";
 
 const MAX_SEED_NUM = 1125899906842624;
 const SEED_WIDGET_NAMES = new Set(["seed", "seed_num", "noise_seed"]);
-const COZY_SEED_NODE_NAME = "CozyGenSeedInput";
+const COZY_SEED_NODE_NAMES = new Set(["CozyGenSeedInput", "CozyGenRandomNoiseInput"]);
 
 function randomIntInRange(minValue, maxValue) {
     const min = Number.isFinite(minValue) ? Math.floor(minValue) : 0;
@@ -14,7 +14,7 @@ function randomIntInRange(minValue, maxValue) {
 
 function findSeedWidget(node) {
     if (!node?.widgets) return null;
-    return node.widgets.find((widget) => widget.name === "seed");
+    return node.widgets.find((widget) => SEED_WIDGET_NAMES.has(widget.name));
 }
 
 if (!api.cozySeedQueuePatched) {
@@ -42,7 +42,7 @@ if (!api.cozySeedQueuePatched) {
 app.registerExtension({
     name: "cozygen.seed_input",
     beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== COZY_SEED_NODE_NAME) return;
+        if (!COZY_SEED_NODE_NAMES.has(nodeData.name)) return;
 
         function ensureRandomizeButton(node) {
             const seedWidget = findSeedWidget(node);
