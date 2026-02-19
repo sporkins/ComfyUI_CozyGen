@@ -138,6 +138,8 @@ function App() {
   const [queueRemaining, setQueueRemaining] = useState(null);
   const workflowDataRef = useRef(null);
   const skipWorkflowFetchRef = useRef(false);
+  const videoPreviewEntriesRef = useRef({});
+  const runIdRef = useRef('');
 
   useEffect(() => {
     workflowDataRef.current = workflowData;
@@ -406,9 +408,26 @@ function App() {
             updated_at: new Date().toISOString(),
           }).catch(() => {});
         } else if (msg.type === 'cozygen_video_ready') {
-          const videoUrl = msg?.data?.video_url
-            || (msg?.data?.filename ? getViewUrl(msg.data.filename, msg.data.subfolder || '', msg.data.type || 'output') : null);
-          const previewUrls = videoUrl ? [videoUrl] : [];
+          const data = msg?.data || {};
+          const videoUrl = data.video_url
+            || (data.filename ? getViewUrl(data.filename, data.subfolder || '', data.type || 'output') : null);
+          const fallbackKey = data.filename ? `${data.subfolder || ''}/${data.filename}` : videoUrl;
+          const previewKey = data.preview_key || fallbackKey;
+          const previewPriority = Number.isFinite(Number(data.priority)) ? Number(data.priority) : 9999;
+          const previewName = data.param_name || data.filename || 'Video Preview';
+          if (videoUrl && previewKey) {
+            videoPreviewEntriesRef.current[previewKey] = {
+              url: videoUrl,
+              priority: previewPriority,
+              param_name: String(previewName),
+            };
+          }
+          const previewUrls = Object.values(videoPreviewEntriesRef.current)
+            .sort((a, b) => {
+              if (a.priority !== b.priority) return a.priority - b.priority;
+              return a.param_name.localeCompare(b.param_name);
+            })
+            .map((entry) => entry.url);
           if (previewUrls.length > 0) {
             setPreviewImages(previewUrls);
             localStorage.setItem('lastPreviewImages', JSON.stringify(previewUrls));
@@ -429,6 +448,30 @@ function App() {
             preview_images: previewUrls,
             updated_at: new Date().toISOString(),
           }).catch(() => {});
+        } else if (msg.type === 'cozygen_run_end') {
+          const eventRunId = msg?.data?.run_id;
+          if (eventRunId && runIdRef.current && eventRunId !== runIdRef.current) {
+            return;
+          }
+          let latestPreviewImages = [];
+          try {
+            latestPreviewImages = JSON.parse(localStorage.getItem('lastPreviewImages') || '[]');
+          } catch {
+            latestPreviewImages = [];
+          }
+          setIsLoading(false);
+          setProgressValue(0);
+          setProgressMax(0);
+          setStatusText('Finished');
+          const lastPromptId = localStorage.getItem('lastPromptId');
+          if (lastPromptId) {
+            saveCozySession({
+              id: lastPromptId,
+              status: 'finished',
+              preview_images: latestPreviewImages,
+              updated_at: new Date().toISOString(),
+            }).catch(() => {});
+          }
         } else if (msg.type === 'executing') {
           const nodeId = msg.data.node;
           // If nodeId is null, it means the prompt is finished, but we wait for our own message.
@@ -461,6 +504,30 @@ function App() {
           const remaining = msg?.data?.status?.exec_info?.queue_remaining;
           if (typeof remaining === 'number') {
             setQueueRemaining(remaining);
+          }
+      } else if (msg.type === 'execution_interrupted') {
+          const messagePromptId = msg?.data?.prompt_id ? String(msg.data.prompt_id) : null;
+          const activePromptId = localStorage.getItem('lastPromptId');
+          if (messagePromptId && activePromptId && messagePromptId !== activePromptId) {
+            return;
+          }
+          let latestPreviewImages = [];
+          try {
+            latestPreviewImages = JSON.parse(localStorage.getItem('lastPreviewImages') || '[]');
+          } catch {
+            latestPreviewImages = [];
+          }
+          setIsLoading(false);
+          setProgressValue(0);
+          setProgressMax(0);
+          setStatusText('Finished');
+          if (activePromptId) {
+            saveCozySession({
+              id: activePromptId,
+              status: 'finished',
+              preview_images: latestPreviewImages,
+              updated_at: new Date().toISOString(),
+            }).catch(() => {});
           }
       }
     };
@@ -601,6 +668,8 @@ function App() {
     setFormData({});
     setRandomizeState({});
     setPreviewImages([]);
+    videoPreviewEntriesRef.current = {};
+    runIdRef.current = '';
   };
 
   const handleFormChange = (inputName, value) => {
@@ -645,6 +714,8 @@ function App() {
     if(clear) {
         setIsLoading(true);
         setPreviewImages([]); // Clear previous images
+        videoPreviewEntriesRef.current = {};
+        runIdRef.current = '';
         setStatusText('Queuing prompt...');
     }
 
@@ -652,6 +723,7 @@ function App() {
         const runId = (typeof crypto !== 'undefined' && crypto.randomUUID)
           ? crypto.randomUUID()
           : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        runIdRef.current = runId;
         const queueWarningThreshold = 10;
         try {
           const queueData = await getQueue();
@@ -811,7 +883,7 @@ function App() {
             if(node.class_type === "CozyGenMetaText") {
                 node.inputs.value = metaTextLines.join("\n");
             }
-            if (node.class_type === "CozyGenOutput" || node.class_type === "CozyGenVideoOutput") {
+            if (["CozyGenOutput", "CozyGenVideoOutput", "CozyGenVideoPreviewOutput", "CozyGenVideoPreviewOutputMulti", "CozyGenEnd"].includes(node.class_type)) {
                 node.inputs.run_id = runId;
             }
         }
@@ -854,6 +926,8 @@ function App() {
 
   const handleClearPreview = () => {
     setPreviewImages([]);
+    videoPreviewEntriesRef.current = {};
+    runIdRef.current = '';
     localStorage.removeItem('lastPreviewImages');
   };
 

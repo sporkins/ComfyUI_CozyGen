@@ -14,6 +14,7 @@ import server # Import server
 import asyncio # Import Import asyncio
 from comfy.comfy_types import node_typing, ComfyNodeABC, InputTypeDict
 from comfy.comfy_types.node_typing import IO
+import comfy.model_management
 
 
 
@@ -27,6 +28,14 @@ class _CozyGenDynamicTypes(str):
         return not self.__eq__(other)
 
 CozyGenDynamicTypes = _CozyGenDynamicTypes("COZYGEN_DYNAMIC_TYPE")
+
+
+class _CozyGenAnyType(str):
+    def __ne__(self, __value: object) -> bool:
+        return False
+
+
+CozyGenAnyType = _CozyGenAnyType("*")
 
 
 class CozyGenDynamicInput(ComfyNodeABC):
@@ -99,6 +108,64 @@ class CozyGenBoolInput:
 
     def get_value(self, param_name, priority, value):
         return (value, )
+
+
+class CozyGenConditionalInterrupt:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "input": (CozyGenAnyType,),
+                "proceed": (IO.BOOLEAN, {"default": True}),
+            },
+        }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, input_types):
+        return True
+
+    RETURN_TYPES = (CozyGenAnyType,)
+    RETURN_NAMES = ("output",)
+    FUNCTION = "route_or_interrupt"
+    CATEGORY = "CozyGen/Flow"
+
+    def route_or_interrupt(self, input, proceed):
+        if not proceed:
+            raise comfy.model_management.InterruptProcessingException()
+        return (input,)
+
+
+class CozyGenEnd:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "input": (CozyGenAnyType,),
+            },
+            "hidden": {
+                "run_id": (IO.STRING, {"default": ""}),
+            },
+        }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, input_types):
+        return True
+
+    RETURN_TYPES = ()
+    FUNCTION = "end"
+    OUTPUT_NODE = True
+    CATEGORY = "CozyGen/Flow"
+
+    def end(self, input, run_id=""):
+        message_data = {
+            "status": "finished",
+            "run_id": run_id,
+        }
+        server_instance = server.PromptServer.instance
+        if server_instance:
+            server_instance.send_sync("cozygen_run_end", message_data)
+            print(f"CozyGen: Sent custom WebSocket message: {{'type': 'cozygen_run_end', 'data': {message_data}}}")
+        return {}
 
 
 class CozyGenImageInput(ComfyNodeABC):
@@ -353,6 +420,60 @@ class CozyGenVideoPreviewOutput:
             "filename": payload["filename"],
             "subfolder": payload["subfolder"],
             "type": payload["type"],
+        }
+
+        server_instance = server.PromptServer.instance
+        if server_instance:
+            server_instance.send_sync("cozygen_video_ready", message_data)
+            print(f"CozyGen: Sent custom WebSocket message: {{'type': 'cozygen_video_ready', 'data': {message_data}}}")
+
+        return {"ui": {"videos": [payload]}}
+
+
+class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "Video Preview"}),
+                "priority": (IO.INT, {"default": 10}),
+                "video_path": (IO.STRING, {"default": ""}),
+            },
+            "hidden": {
+                "run_id": (IO.STRING, {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "preview_video"
+    OUTPUT_NODE = True
+    CATEGORY = "CozyGen"
+
+    def preview_video(self, param_name, priority, video_path, run_id=""):
+        payload = self._normalize_view_payload(video_path)
+        if not payload:
+            print(f"CozyGen: CozyGenVideoPreviewOutputMulti could not parse video_path='{video_path}'")
+            return {"ui": {"videos": []}}
+
+        preview_name = str(param_name).strip() if param_name is not None else ""
+        if not preview_name:
+            preview_name = "Video Preview"
+        try:
+            preview_priority = int(priority)
+        except (TypeError, ValueError):
+            preview_priority = 10
+
+        preview_key = f"{preview_name}:{preview_priority}:{payload['subfolder']}/{payload['filename']}"
+        video_url = f"/view?filename={payload['filename']}&subfolder={payload['subfolder']}&type={payload['type']}"
+        message_data = {
+            "status": "video_generated",
+            "video_url": video_url,
+            "filename": payload["filename"],
+            "subfolder": payload["subfolder"],
+            "type": payload["type"],
+            "param_name": preview_name,
+            "priority": preview_priority,
+            "preview_key": preview_key,
         }
 
         server_instance = server.PromptServer.instance
@@ -778,6 +899,7 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenOutput": CozyGenOutput,
     "CozyGenVideoOutput": CozyGenVideoOutput,
     "CozyGenVideoPreviewOutput": CozyGenVideoPreviewOutput,
+    "CozyGenVideoPreviewOutputMulti": CozyGenVideoPreviewOutputMulti,
     "CozyGenDynamicInput": CozyGenDynamicInput,
     "CozyGenImageInput": CozyGenImageInput,
     "CozyGenFloatInput": CozyGenFloatInput,
@@ -790,13 +912,16 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenLoraInputMulti": CozyGenLoraInputMulti,
     "CozyGenWanVideoModelSelector": CozyGenWanVideoModelSelector,
     "CozyGenMetaText": CozyGenMetaText,
-    "CozyGenBoolInput": CozyGenBoolInput
+    "CozyGenBoolInput": CozyGenBoolInput,
+    "CozyGenConditionalInterrupt": CozyGenConditionalInterrupt,
+    "CozyGenEnd": CozyGenEnd
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenOutput": "CozyGen Output",
     "CozyGenVideoOutput": "CozyGen Video Output",
     "CozyGenVideoPreviewOutput": "CozyGen Video Preview Output",
+    "CozyGenVideoPreviewOutputMulti": "CozyGen Video Preview Output Multi",
     "CozyGenDynamicInput": "CozyGen Dynamic Input",
     "CozyGenImageInput": "CozyGen Image Input",
     "CozyGenFloatInput": "CozyGen Float Input",
@@ -809,5 +934,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenLoraInputMulti": "CozyGen Lora Input Multi",
     "CozyGenWanVideoModelSelector": "CozyGen WanVideo Model Selector",
     "CozyGenMetaText": "CozyGen Meta Text",
-    "CozyGenBoolInput": "CozyGen Bool Input"
+    "CozyGenBoolInput": "CozyGen Bool Input",
+    "CozyGenConditionalInterrupt": "CozyGen Conditional Interrupt",
+    "CozyGenEnd": "CozyGen End"
 }
