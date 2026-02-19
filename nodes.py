@@ -168,6 +168,19 @@ class CozyGenEnd:
         return {}
 
 
+class CozyGenPriorityManager:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {}}
+
+    RETURN_TYPES = ()
+    FUNCTION = "manage"
+    CATEGORY = "CozyGen/Flow"
+
+    def manage(self):
+        return ()
+
+
 class CozyGenImageInput(ComfyNodeABC):
     @classmethod
     def INPUT_TYPES(s) -> InputTypeDict:
@@ -318,6 +331,9 @@ class CozyGenVideoOutput:
         return { "ui": { "videos": results } }
 
 class CozyGenVideoPreviewOutput:
+    _VIDEO_EXTENSIONS = (".mp4", ".webm", ".mkv", ".mov", ".avi")
+    _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+
     def __init__(self):
         self.output_dir = folder_paths.get_output_directory()
         get_temp = getattr(folder_paths, "get_temp_directory", None)
@@ -407,8 +423,45 @@ class CozyGenVideoPreviewOutput:
             "type": "output",
         }
 
+    def _promote_sidecar_video_payload(self, payload):
+        if not payload:
+            return payload
+
+        filename = str(payload.get("filename", "")).strip()
+        if not filename:
+            return payload
+
+        lower_name = filename.lower()
+        if lower_name.endswith(self._VIDEO_EXTENSIONS):
+            return payload
+        if not lower_name.endswith(self._IMAGE_EXTENSIONS):
+            return payload
+
+        media_type = payload.get("type", "output")
+        if media_type == "temp":
+            base_dir = self.temp_dir
+        else:
+            base_dir = self.output_dir
+        if not base_dir:
+            return payload
+
+        subfolder = str(payload.get("subfolder", "")).replace("/", os.sep).replace("\\", os.sep)
+        target_dir = os.path.normpath(os.path.join(base_dir, subfolder))
+        stem = os.path.splitext(filename)[0]
+
+        for ext in self._VIDEO_EXTENSIONS:
+            candidate = stem + ext
+            candidate_path = os.path.join(target_dir, candidate)
+            if os.path.exists(candidate_path):
+                next_payload = dict(payload)
+                next_payload["filename"] = candidate
+                return next_payload
+
+        return payload
+
     def preview_video(self, video_path, run_id=""):
         payload = self._normalize_view_payload(video_path)
+        payload = self._promote_sidecar_video_payload(payload)
         if not payload:
             print(f"CozyGen: CozyGenVideoPreviewOutput could not parse video_path='{video_path}'")
             return {"ui": {"videos": []}}
@@ -439,6 +492,9 @@ class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
                 "priority": (IO.INT, {"default": 10}),
                 "video_path": (IO.STRING, {"default": ""}),
             },
+            "optional": {
+                "filenames": (CozyGenAnyType,),
+            },
             "hidden": {
                 "run_id": (IO.STRING, {"default": ""}),
             },
@@ -449,10 +505,73 @@ class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
     OUTPUT_NODE = True
     CATEGORY = "CozyGen"
 
-    def preview_video(self, param_name, priority, video_path, run_id=""):
-        payload = self._normalize_view_payload(video_path)
-        if not payload:
-            print(f"CozyGen: CozyGenVideoPreviewOutputMulti could not parse video_path='{video_path}'")
+    def _collect_candidate_video_paths(self, video_path="", filenames=None):
+        collected = []
+
+        def add_candidate(value):
+            if value is None:
+                return
+            if isinstance(value, (str, bytes, os.PathLike)):
+                text = str(value).strip()
+                if text:
+                    collected.append(text)
+                return
+            if isinstance(value, dict):
+                fullpath = value.get("fullpath")
+                if fullpath:
+                    add_candidate(fullpath)
+                    return
+                filename = value.get("filename")
+                if filename:
+                    subfolder = str(value.get("subfolder", "")).strip()
+                    if subfolder:
+                        collected.append(f"{subfolder}/{filename}".replace("\\", "/"))
+                    else:
+                        collected.append(str(filename))
+                return
+            if isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], bool):
+                # VHS_VideoCombine returns (save_output: bool, output_files: list[str])
+                add_candidate(value[1])
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    add_candidate(item)
+                return
+
+        add_candidate(video_path)
+        add_candidate(filenames)
+
+        deduped = []
+        seen = set()
+        for path in collected:
+            norm = str(path).strip()
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            deduped.append(norm)
+        return deduped
+
+    def preview_video(self, param_name, priority, video_path, filenames=None, run_id=""):
+        candidate_paths = self._collect_candidate_video_paths(video_path, filenames)
+
+        payloads = []
+        seen_payload_keys = set()
+        for candidate in candidate_paths:
+            payload = self._normalize_view_payload(candidate)
+            payload = self._promote_sidecar_video_payload(payload)
+            if not payload:
+                continue
+            payload_key = (payload.get("type", "output"), payload.get("subfolder", ""), payload.get("filename", ""))
+            if payload_key in seen_payload_keys:
+                continue
+            seen_payload_keys.add(payload_key)
+            payloads.append(payload)
+
+        if not payloads:
+            print(
+                "CozyGen: CozyGenVideoPreviewOutputMulti could not parse any video path "
+                f"from video_path='{video_path}'"
+            )
             return {"ui": {"videos": []}}
 
         preview_name = str(param_name).strip() if param_name is not None else ""
@@ -463,25 +582,36 @@ class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
         except (TypeError, ValueError):
             preview_priority = 10
 
-        preview_key = f"{preview_name}:{preview_priority}:{payload['subfolder']}/{payload['filename']}"
-        video_url = f"/view?filename={payload['filename']}&subfolder={payload['subfolder']}&type={payload['type']}"
-        message_data = {
-            "status": "video_generated",
-            "video_url": video_url,
-            "filename": payload["filename"],
-            "subfolder": payload["subfolder"],
-            "type": payload["type"],
-            "param_name": preview_name,
-            "priority": preview_priority,
-            "preview_key": preview_key,
-        }
-
         server_instance = server.PromptServer.instance
         if server_instance:
-            server_instance.send_sync("cozygen_video_ready", message_data)
-            print(f"CozyGen: Sent custom WebSocket message: {{'type': 'cozygen_video_ready', 'data': {message_data}}}")
+            for order_index, payload in enumerate(payloads):
+                preview_key = (
+                    f"{preview_name}:{preview_priority}:{order_index}:"
+                    f"{payload['subfolder']}/{payload['filename']}"
+                )
+                video_url = (
+                    f"/view?filename={payload['filename']}"
+                    f"&subfolder={payload['subfolder']}"
+                    f"&type={payload['type']}"
+                )
+                message_data = {
+                    "status": "video_generated",
+                    "video_url": video_url,
+                    "filename": payload["filename"],
+                    "subfolder": payload["subfolder"],
+                    "type": payload["type"],
+                    "param_name": preview_name,
+                    "priority": preview_priority,
+                    "order": order_index,
+                    "preview_key": preview_key,
+                }
+                server_instance.send_sync("cozygen_video_ready", message_data)
+                print(
+                    "CozyGen: Sent custom WebSocket message: "
+                    f"{{'type': 'cozygen_video_ready', 'data': {message_data}}}"
+                )
 
-        return {"ui": {"videos": [payload]}}
+        return {"ui": {"videos": payloads}}
 
 import comfy.samplers
 import comfy.sample
@@ -495,14 +625,32 @@ MAX_SEED_NUM = 1125899906842624
 
 
 def _get_choice_values(choice_type):
+    raw_choices = []
     if choice_type == "sampler":
-        return list(comfy.samplers.KSampler.SAMPLERS)
-    if choice_type == "scheduler":
-        return list(comfy.samplers.KSampler.SCHEDULERS)
-    try:
-        return list(folder_paths.get_filename_list(choice_type))
-    except KeyError:
-        return []
+        raw_choices = list(comfy.samplers.KSampler.SAMPLERS)
+    elif choice_type == "scheduler":
+        raw_choices = list(comfy.samplers.KSampler.SCHEDULERS)
+    else:
+        try:
+            raw_choices = list(folder_paths.get_filename_list(choice_type))
+        except KeyError:
+            raw_choices = []
+
+    normalized = []
+    seen = set()
+    for choice in raw_choices:
+        value = _normalize_choice_value(choice)
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def _normalize_choice_value(value):
+    if value is None:
+        return ""
+    return str(value).strip().replace("\\", "/")
 
 class CozyGenFloatInput:
     @classmethod
@@ -629,27 +777,13 @@ class CozyGenChoiceInput:
     _NODE_CLASS_NAME = "CozyGenChoiceInput"
     @classmethod
     def INPUT_TYPES(cls):
-        # Create a flat list of all possible choices for the initial dropdown
-        all_choices = []
-        for choice_type in all_choice_types:
-            if choice_type == "sampler":
-                all_choices.extend(comfy.samplers.KSampler.SAMPLERS)
-            elif choice_type == "scheduler":
-                all_choices.extend(comfy.samplers.KSampler.SCHEDULERS)
-            else:
-                try:
-                    all_choices.extend(folder_paths.get_filename_list(choice_type))
-                except KeyError:
-                    pass # Ignore choice types that don't have a corresponding folder
-        # Add a "None" option to be safe
-        all_choices = ["None"] + sorted(list(set(all_choices)))
-
         return {
             "required": {
                 "param_name": (IO.STRING, {"default": "Choice Parameter"}),
                 "priority": (IO.INT, {"default": 10}),
                 "choice_type": (all_choice_types,),
-                "default_choice": (all_choices,),
+                # Keep this as STRING so stale graph values don't fail pre-execution validation.
+                "default_choice": (IO.STRING, {"default": "None"}),
                 "display_bypass": (IO.BOOLEAN, {"default": False}),
             },
             "hidden": {
@@ -666,15 +800,21 @@ class CozyGenChoiceInput:
         # If it's present, we use it. Otherwise, we use the default set in the node graph.
         final_value = value if value and value != "None" else default_choice
         choices = _get_choice_values(choice_type)
+        final_value_norm = _normalize_choice_value(final_value)
 
         # Keep final value aligned with selected choice_type.
         if choices:
-            if not final_value or final_value == "None" or final_value not in choices:
+            normalized_choices = {_normalize_choice_value(c): c for c in choices}
+            if final_value in choices:
+                return (final_value,)
+            if final_value_norm in normalized_choices:
+                return (normalized_choices[final_value_norm],)
+            if not final_value or final_value == "None":
                 return (choices[0],)
         elif not final_value:
             return ("None",)
 
-        return (final_value,)
+        return (str(final_value),)
 
 class CozyGenLoraInput:
     _NODE_CLASS_NAME = "CozyGenLoraInput"
@@ -914,7 +1054,8 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenMetaText": CozyGenMetaText,
     "CozyGenBoolInput": CozyGenBoolInput,
     "CozyGenConditionalInterrupt": CozyGenConditionalInterrupt,
-    "CozyGenEnd": CozyGenEnd
+    "CozyGenEnd": CozyGenEnd,
+    "CozyGenPriorityManager": CozyGenPriorityManager
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -936,5 +1077,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenMetaText": "CozyGen Meta Text",
     "CozyGenBoolInput": "CozyGen Bool Input",
     "CozyGenConditionalInterrupt": "CozyGen Conditional Interrupt",
-    "CozyGenEnd": "CozyGen End"
+    "CozyGenEnd": "CozyGen End",
+    "CozyGenPriorityManager": "CozyGen Priority Manager"
 }

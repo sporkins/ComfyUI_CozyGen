@@ -419,6 +419,24 @@ alias_map = {
     "unet": "unet_gguf"
 }
 
+
+def _normalize_choice_value(value) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().replace("\\", "/")
+
+
+def _normalize_choice_list(choices):
+    normalized = []
+    seen = set()
+    for choice in choices:
+        value = _normalize_choice_value(choice)
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
 async def get_choices(request: web.Request) -> web.Response:
     choice_type = request.rel_url.query.get('type', '')
 
@@ -450,7 +468,8 @@ async def get_choices(request: web.Request) -> web.Response:
         choices = folder_paths.get_filename_list(resolved_choice_type)
     else:
         return web.json_response({"error": f"Invalid choice type: {choice_type}"}, status=400)
-    
+
+    choices = _normalize_choice_list(choices)
     return web.json_response({"choices": choices})
 
 routes = [

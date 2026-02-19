@@ -414,17 +414,20 @@ function App() {
           const fallbackKey = data.filename ? `${data.subfolder || ''}/${data.filename}` : videoUrl;
           const previewKey = data.preview_key || fallbackKey;
           const previewPriority = Number.isFinite(Number(data.priority)) ? Number(data.priority) : 9999;
+          const previewOrder = Number.isFinite(Number(data.order)) ? Number(data.order) : 0;
           const previewName = data.param_name || data.filename || 'Video Preview';
           if (videoUrl && previewKey) {
             videoPreviewEntriesRef.current[previewKey] = {
               url: videoUrl,
               priority: previewPriority,
+              order: previewOrder,
               param_name: String(previewName),
             };
           }
           const previewUrls = Object.values(videoPreviewEntriesRef.current)
             .sort((a, b) => {
               if (a.priority !== b.priority) return a.priority - b.priority;
+              if (a.order !== b.order) return a.order - b.order;
               return a.param_name.localeCompare(b.param_name);
             })
             .map((entry) => entry.url);
