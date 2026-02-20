@@ -31,31 +31,53 @@ function ensureComboWidget(node, widgetName, choices, fallbackValue) {
     const widget = node.widgets?.find((w) => w.name === widgetName);
     if (!widget) return null;
     node.properties = node.properties || {};
+    const widgetIndex = node.widgets.indexOf(widget);
 
     const normalizedLookup = new Map();
     for (const choice of choices) {
         normalizedLookup.set(normalizeChoiceValue(choice), choice);
     }
 
-    const currentValue = normalizedLookup.get(normalizeChoiceValue(widget.value));
+    const savedWidgetValue = (
+        Array.isArray(node.widgets_values) &&
+        widgetIndex >= 0 &&
+        node.widgets_values.length > widgetIndex
+    ) ? node.widgets_values[widgetIndex] : undefined;
+
+    const preferredValue = (
+        node.properties[widgetName] ??
+        savedWidgetValue ??
+        widget.value
+    );
+    const currentValue = normalizedLookup.get(normalizeChoiceValue(preferredValue));
     const fallback = normalizedLookup.get(normalizeChoiceValue(fallbackValue));
     const nextValue = currentValue ?? fallback ?? choices[0];
 
-    const callback = typeof widget.callback === "function" ? widget.callback : null;
+    const originalCallback = widget.__cozygenOriginalCallback
+        || (typeof widget.callback === "function" ? widget.callback : null);
+
     const comboWidget = {
         type: "combo",
         name: widgetName,
         value: nextValue,
         options: { values: choices },
+        __cozygenOriginalCallback: originalCallback,
     };
+
     comboWidget.callback = (value) => {
         comboWidget.value = value;
         node.properties[widgetName] = value;
-        callback?.(value);
+        if (Array.isArray(node.widgets_values) && widgetIndex >= 0) {
+            node.widgets_values[widgetIndex] = value;
+        }
+        comboWidget.__cozygenOriginalCallback?.(value);
     };
 
-    node.widgets.splice(node.widgets.indexOf(widget), 1, comboWidget);
+    node.widgets.splice(widgetIndex, 1, comboWidget);
     node.properties[widgetName] = nextValue;
+    if (Array.isArray(node.widgets_values) && widgetIndex >= 0) {
+        node.widgets_values[widgetIndex] = nextValue;
+    }
     return comboWidget;
 }
 
@@ -89,17 +111,21 @@ app.registerExtension({
 	name: "CozyGen.ChoiceInput",
 	async beforeRegisterNodeDef(nodeType, nodeData, app) {
 		if (nodeData.name === "CozyGenChoiceInput") {
-			const onNodeCreated = nodeType.prototype.onNodeCreated;
-			nodeType.prototype.onNodeCreated = async function () {
-				onNodeCreated?.apply(this, arguments);
+            const onAdded = nodeType.prototype.onAdded;
+            nodeType.prototype.onAdded = async function () {
+                onAdded?.apply(this, arguments);
                 patchChoiceTypeCallback(this);
-                await refreshChoiceWidgets(this);
-			};
+                // Avoid clobbering saved widget values while graph is being deserialized.
+                if (!app.configuringGraph) {
+                    await refreshChoiceWidgets(this);
+                }
+            };
 
-            const onConfigure = nodeType.prototype.onConfigure;
-            nodeType.prototype.onConfigure = async function () {
-                onConfigure?.apply(this, arguments);
+            const onAfterGraphConfigured = nodeType.prototype.onAfterGraphConfigured;
+            nodeType.prototype.onAfterGraphConfigured = async function () {
+                onAfterGraphConfigured?.apply(this, arguments);
                 patchChoiceTypeCallback(this);
+                // Refresh once the graph is fully configured so saved defaults are available.
                 await refreshChoiceWidgets(this);
             };
 		}

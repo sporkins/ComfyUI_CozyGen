@@ -625,26 +625,32 @@ MAX_SEED_NUM = 1125899906842624
 
 
 def _get_choice_values(choice_type):
+    resolved_choice_type = choice_type
+    # Keep runtime resolution aligned with /cozygen/get_choices for legacy workflows.
+    if choice_type == "unet" and "unet_gguf" in folder_paths.folder_names_and_paths:
+        resolved_choice_type = "unet_gguf"
+
     raw_choices = []
-    if choice_type == "sampler":
+    if resolved_choice_type == "sampler":
         raw_choices = list(comfy.samplers.KSampler.SAMPLERS)
-    elif choice_type == "scheduler":
+    elif resolved_choice_type == "scheduler":
         raw_choices = list(comfy.samplers.KSampler.SCHEDULERS)
     else:
         try:
-            raw_choices = list(folder_paths.get_filename_list(choice_type))
+            raw_choices = list(folder_paths.get_filename_list(resolved_choice_type))
         except KeyError:
             raw_choices = []
 
-    normalized = []
+    canonical = []
     seen = set()
     for choice in raw_choices:
-        value = _normalize_choice_value(choice)
-        if value in seen:
+        choice_str = str(choice)
+        choice_norm = _normalize_choice_value(choice_str)
+        if choice_norm in seen:
             continue
-        seen.add(value)
-        normalized.append(value)
-    return normalized
+        seen.add(choice_norm)
+        canonical.append(choice_str)
+    return canonical
 
 
 def _normalize_choice_value(value):
@@ -795,7 +801,7 @@ class CozyGenChoiceInput:
     FUNCTION = "get_value"
     CATEGORY = "CozyGen/Static"
 
-    def get_value(self, param_name, priority, choice_type, default_choice, display_bypass, value):
+    def get_value(self, param_name, priority, choice_type, default_choice, display_bypass, value=""):
         # The `value` parameter comes from the frontend UI on generation.
         # If it's present, we use it. Otherwise, we use the default set in the node graph.
         final_value = value if value and value != "None" else default_choice
@@ -857,6 +863,7 @@ class CozyGenLoraInput:
 
 class CozyGenLoraInputMulti:
     _NODE_CLASS_NAME = "CozyGenLoraInputMulti"
+    MAX_LORAS = 5
 
     @classmethod
     def get_choices(cls):
@@ -868,94 +875,55 @@ class CozyGenLoraInputMulti:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "param_name": (IO.STRING, {"default": "Lora Selector (Multi)"}),
-                "priority": (IO.INT, {"default": 10}),
-                "lora_0": (CozyGenLoraInputMulti.get_choices(), {
-                    "default": "None",
-                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
-                }),
-                "strength_0": (IO.FLOAT, {
-                    "default": 1.0,
-                    "min": -5.0,
-                    "max": 5.0,
-                    "step": 0.05,
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
-                }),
-                "lora_1": (CozyGenLoraInputMulti.get_choices(), {
-                    "default": "None",
-                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
-                }),
-                "strength_1": (IO.FLOAT, {
-                    "default": 1.0,
-                    "min": -5.0,
-                    "max": 5.0,
-                    "step": 0.05,
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
-                }),
-                "lora_2": (CozyGenLoraInputMulti.get_choices(), {
-                    "default": "None",
-                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
-                }),
-                "strength_2": (IO.FLOAT, {
-                    "default": 1.0,
-                    "min": -5.0,
-                    "max": 5.0,
-                    "step": 0.05,
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
-                }),
-                "lora_3": (CozyGenLoraInputMulti.get_choices(), {
-                    "default": "None",
-                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
-                }),
-                "strength_3": (IO.FLOAT, {
-                    "default": 1.0,
-                    "min": -5.0,
-                    "max": 5.0,
-                    "step": 0.05,
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
-                }),
-                "lora_4": (CozyGenLoraInputMulti.get_choices(), {
-                    "default": "None",
-                    "tooltip": "Outputs COMBO-compatible LoRA names — wires directly to WanVideoLoraSelectMulti lora_N.",
-                }),
-                "strength_4": (IO.FLOAT, {
-                    "default": 1.0,
-                    "min": -5.0,
-                    "max": 5.0,
-                    "step": 0.05,
-                    "tooltip": "Connect each lora_N → WanVideo lora_N and strength_N → strength_N directly (no loading here).",
-                }),
-            },
+        required = {
+            "param_name": (IO.STRING, {"default": "Lora Selector (Multi)"}),
+            "priority": (IO.INT, {"default": 10}),
+            "num_loras": (IO.INT, {
+                "default": cls.MAX_LORAS,
+                "min": 1,
+                "max": cls.MAX_LORAS,
+                "step": 1,
+                "tooltip": "How many LoRAs are active.",
+            }),
         }
 
-    RETURN_TYPES = (
-        IO.ANY, IO.FLOAT,
-        IO.ANY, IO.FLOAT,
-        IO.ANY, IO.FLOAT,
-        IO.ANY, IO.FLOAT,
-        IO.ANY, IO.FLOAT,
-    )
-    RETURN_NAMES = (
-        "lora_0", "strength_0", "lora_1", "strength_1",
-        "lora_2", "strength_2", "lora_3", "strength_3",
-        "lora_4", "strength_4",
-    )
+        for index in range(cls.MAX_LORAS):
+            required[f"lora_{index}"] = (CozyGenLoraInputMulti.get_choices(), {
+                "default": "None",
+                "tooltip": "Select a LoRA to include in the LORA_STACK output.",
+            })
+            required[f"strength_{index}"] = (IO.FLOAT, {
+                "default": 1.0,
+                "min": -5.0,
+                "max": 5.0,
+                "step": 0.05,
+                "tooltip": "Applied to both model and clip strength in the output stack.",
+            })
+
+        return {
+            "required": required,
+        }
+
+    RETURN_TYPES = ("LORA_STACK",)
+    RETURN_NAMES = ("lora_stack",)
     FUNCTION = "get_value"
     CATEGORY = "CozyGen"
-    DESCRIPTION = "Select LoRAs → STRING outputs connect directly to WanVideo lora_N slots."
+    DESCRIPTION = "Select LoRAs and output one LORA_STACK."
 
-    def get_value(self, param_name, priority, lora_0, strength_0, lora_1, strength_1, lora_2, strength_2, lora_3, strength_3, lora_4, strength_4):
-        lora_inputs = [(lora_0, strength_0), (lora_1, strength_1), (lora_2, strength_2), (lora_3, strength_3), (lora_4, strength_4)]
-        output = []
-        valid = CozyGenLoraInputMulti.get_choices()
-        for name, stren in lora_inputs:
-            if name not in valid or name == "None" or stren == 0:
-                output.extend(["none", 0.0])
-            else:
-                output.extend([name, float(stren)])
-        return tuple(output)
+    def get_value(self, param_name, priority, num_loras=5, **kwargs):
+        valid = set(CozyGenLoraInputMulti.get_choices())
+        active_count = max(1, min(self.MAX_LORAS, int(num_loras)))
+        lora_stack = []
+
+        for idx in range(active_count):
+            lora_name = kwargs.get(f"lora_{idx}", "None")
+            strength = float(kwargs.get(f"strength_{idx}", 1.0))
+            if lora_name not in valid or lora_name == "None" or strength == 0:
+                continue
+            # EasyUse shape: (lora_name, model_strength, clip_strength)
+            lora_stack.append((lora_name, strength, strength))
+
+        return (lora_stack,)
 
 class CozyGenWanVideoModelSelector:
     _NODE_CLASS_NAME = "CozyGenWanVideoModelSelector"
@@ -1080,3 +1048,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenEnd": "CozyGen End",
     "CozyGenPriorityManager": "CozyGen Priority Manager"
 }
+

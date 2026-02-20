@@ -256,8 +256,11 @@ function App() {
       } else if (input.class_type === 'CozyGenChoiceInput') {
         const choiceOptions = Array.isArray(input.inputs.choices) ? input.inputs.choices : [];
         const configuredDefault = input.inputs.value || input.inputs.default_choice;
-        if (configuredDefault && choiceOptions.includes(configuredDefault)) {
-          defaultValue = configuredDefault;
+        const normalizeChoice = (value) => String(value || '').trim().replace(/\\/g, '/');
+        const normalizedDefault = normalizeChoice(configuredDefault);
+        const resolvedChoice = choiceOptions.find((choice) => normalizeChoice(choice) === normalizedDefault);
+        if (resolvedChoice) {
+          defaultValue = resolvedChoice;
         } else {
           defaultValue = choiceOptions.length > 0 ? choiceOptions[0] : '';
         }
@@ -268,6 +271,10 @@ function App() {
           lora: input.inputs[`lora_${index}`],
           strength: input.inputs[`strength_${index}`],
         }));
+        const configuredCount = Number(input.inputs.num_loras);
+        defaultValue.num_loras = Number.isFinite(configuredCount)
+          ? Math.max(1, Math.min(5, configuredCount))
+          : 5;
       } else if(input.class_type === "CozyGenWanVideoModelSelector") {
         defaultValue = {
           model_name: input.inputs.model_name || input.inputs.choices?.modelNames?.[0] || 'none',
@@ -836,15 +843,27 @@ function App() {
                     nodeToUpdate.inputs.lora_value = lora;
                 } else if(dynamicNode.class_type === 'CozyGenLoraInputMulti') {
                     const loraValues = Array.isArray(valueToInject) ? valueToInject : [];
+                    const requestedNumLoras = Number(loraValues.num_loras);
+                    let highestActiveIndex = -1;
                     for (let index = 0; index < 5; index += 1) {
                         const loraValue = loraValues[index] || {};
                         const lora = loraValue.lora ?? "None";
                         const strength = loraValue.strength ?? 0;
                         if(lora !== "None" && strength !== 0) {
+                            highestActiveIndex = index;
                             metaTextLines.push(`${dynamicNode.inputs.param_name} ${index + 1} = ${lora}:${Number(strength).toFixed(2)}`)
                         }
                         nodeToUpdate.inputs[`lora_${index}`] = lora;
                         nodeToUpdate.inputs[`strength_${index}`] = strength;
+                    }
+                    if (Number.isFinite(requestedNumLoras)) {
+                        nodeToUpdate.inputs.num_loras = Math.max(1, Math.min(5, requestedNumLoras));
+                    } else {
+                        const fallbackNumLoras = Number.isFinite(Number(dynamicNode.inputs.num_loras))
+                            ? Number(dynamicNode.inputs.num_loras)
+                            : 5;
+                        const inferredNumLoras = highestActiveIndex >= 0 ? (highestActiveIndex + 1) : fallbackNumLoras;
+                        nodeToUpdate.inputs.num_loras = Math.max(1, Math.min(5, inferredNumLoras));
                     }
                 } else if(dynamicNode.class_type === 'CozyGenWanVideoModelSelector') {
                     const modelValue = valueToInject || {};

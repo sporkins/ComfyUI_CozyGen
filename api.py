@@ -420,22 +420,16 @@ alias_map = {
 }
 
 
-def _normalize_choice_value(value) -> str:
-    if value is None:
-        return ""
-    return str(value).strip().replace("\\", "/")
-
-
-def _normalize_choice_list(choices):
-    normalized = []
+def _unique_choice_list(choices):
+    unique = []
     seen = set()
     for choice in choices:
-        value = _normalize_choice_value(choice)
+        value = str(choice)
         if value in seen:
             continue
         seen.add(value)
-        normalized.append(value)
-    return normalized
+        unique.append(value)
+    return unique
 
 async def get_choices(request: web.Request) -> web.Response:
     choice_type = request.rel_url.query.get('type', '')
@@ -444,12 +438,11 @@ async def get_choices(request: web.Request) -> web.Response:
         return web.json_response({"error": "Missing 'type' query parameter"}, status=400)
 
     # Alias map for backward compatibility
-    alias_map = {
+    resolved_choice_type = {
         "samplers_list": "sampler",
         "schedulers_list": "scheduler",
-        "unet": "unet_gguf" # Example of another potential alias
-    }
-    resolved_choice_type = alias_map.get(choice_type, choice_type)
+        "unet": "unet_gguf",
+    }.get(choice_type, choice_type)
 
     choices = []
     if resolved_choice_type == "scheduler":
@@ -469,7 +462,7 @@ async def get_choices(request: web.Request) -> web.Response:
     else:
         return web.json_response({"error": f"Invalid choice type: {choice_type}"}, status=400)
 
-    choices = _normalize_choice_list(choices)
+    choices = _unique_choice_list(choices)
     return web.json_response({"choices": choices})
 
 routes = [
