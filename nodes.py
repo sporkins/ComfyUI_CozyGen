@@ -490,6 +490,7 @@ class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
             "required": {
                 "param_name": (IO.STRING, {"default": "Video Preview"}),
                 "priority": (IO.INT, {"default": 10}),
+                "enabled": (IO.BOOLEAN, {"default": True}),
                 "video_path": (IO.STRING, {"default": ""}),
             },
             "optional": {
@@ -551,7 +552,7 @@ class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
             deduped.append(norm)
         return deduped
 
-    def preview_video(self, param_name, priority, video_path, filenames=None, run_id=""):
+    def preview_video(self, param_name, priority, enabled, video_path, filenames=None, run_id=""):
         candidate_paths = self._collect_candidate_video_paths(video_path, filenames)
 
         payloads = []
@@ -583,7 +584,7 @@ class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
             preview_priority = 10
 
         server_instance = server.PromptServer.instance
-        if server_instance:
+        if enabled and server_instance:
             for order_index, payload in enumerate(payloads):
                 preview_key = (
                     f"{preview_name}:{preview_priority}:{order_index}:"
@@ -668,7 +669,7 @@ class CozyGenFloatInput:
                 "default_value": (IO.FLOAT, {"default": 1.0}),
                 "min_value": (IO.FLOAT, {"default": 0.0}),
                 "max_value": (IO.FLOAT, {"default": 1024.0}),
-                "step": (IO.FLOAT, {"default": 0.1}),
+                "step": (IO.FLOAT, {"default": 0.01}),
                 "add_randomize_toggle": (IO.BOOLEAN, {"default": False}),
             }
         }
@@ -677,7 +678,7 @@ class CozyGenFloatInput:
     FUNCTION = "get_value"
     CATEGORY = "CozyGen/Static"
     def get_value(self, param_name, priority, default_value, min_value, max_value, step, add_randomize_toggle):
-        return (default_value,)
+        return (round(float(default_value), 2),)
 
 class CozyGenIntInput:
     @classmethod
