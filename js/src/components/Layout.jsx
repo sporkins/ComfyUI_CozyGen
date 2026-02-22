@@ -5,11 +5,11 @@ const Layout = () => {
     return (
         <div className="bg-base-100 text-gray-300 min-h-screen font-sans">
             <header className="bg-base-200/80 backdrop-blur-sm shadow-lg sticky top-0 z-50">
-                <nav className="container mx-auto px-4 py-3 flex justify-between items-center">
+                <nav className="w-full px-2 sm:px-4 lg:px-6 py-3 flex flex-wrap justify-between items-center gap-2">
                     <Link to="/">
                         <h1 className="text-2xl font-bold text-white tracking-wider">CozyGen</h1>
                     </Link>
-                    <div className="flex items-center space-x-4">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-4">
                         <NavLink 
                             to="/" 
                             className={({ isActive }) => 
@@ -45,7 +45,7 @@ const Layout = () => {
                     </div>
                 </nav>
             </header>
-            <main className="container mx-auto p-4">
+            <main className="w-full px-2 sm:px-4 lg:px-6 py-4">
                 <Outlet />
             </main>
         </div>

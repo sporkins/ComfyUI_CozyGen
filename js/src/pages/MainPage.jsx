@@ -956,7 +956,7 @@ function App() {
   const hasImageInput = dynamicInputs.some(input => input.class_type === 'CozyGenImageInput');
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="w-full">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pb-28">
             {/* Right Column: Preview & Generate Button */}
             <div className="flex flex-col space-y-2">
@@ -1059,7 +1059,7 @@ function App() {
 
         {/* Sticky Generate Button Footer */}
         <div className="fixed bottom-0 left-0 right-0 bg-base-100/80 backdrop-blur-sm p-4 border-t border-base-300 z-10 shadow-lg">
-            <div className="max-w-2xl mx-auto"> {/* Centered and max-width */}
+            <div className="w-full">
                 <div class="flex flex-row w-full gap-x-4">
                     <button
                         onClick={handleGenerate}

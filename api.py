@@ -167,11 +167,20 @@ async def get_hello(request: web.Request) -> web.Response:
 
 async def get_gallery_files(request: web.Request) -> web.Response:
     subfolder = request.rel_url.query.get('subfolder', '')
+    file_type = request.rel_url.query.get('file_type', 'all').lower()
+    sort_order = request.rel_url.query.get('sort', 'date_desc').lower()
     try:
         page = int(request.rel_url.query.get('page', '1'))
         per_page = int(request.rel_url.query.get('per_page', '20'))
     except ValueError:
         return web.json_response({"error": "Invalid page or per_page parameter"}, status=400)
+
+    valid_file_types = {"all", "image", "video", "audio"}
+    valid_sort_orders = {"date_desc", "date_asc"}
+    if file_type not in valid_file_types:
+        return web.json_response({"error": "Invalid file_type parameter"}, status=400)
+    if sort_order not in valid_sort_orders:
+        return web.json_response({"error": "Invalid sort parameter"}, status=400)
 
     output_directory = folder_paths.get_output_directory()
 
@@ -186,6 +195,23 @@ async def get_gallery_files(request: web.Request) -> web.Response:
     items = os.listdir(gallery_path)
     gallery_items = []
 
+    image_exts = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
+    video_exts = ('.mp4', '.webm')
+    audio_exts = ('.mp3', '.wav', '.flac')
+    media_exts = image_exts + video_exts + audio_exts
+
+    def _matches_file_type(item_name: str) -> bool:
+        lower_name = item_name.lower()
+        if file_type == "all":
+            return lower_name.endswith(media_exts)
+        if file_type == "image":
+            return lower_name.endswith(image_exts)
+        if file_type == "video":
+            return lower_name.endswith(video_exts)
+        if file_type == "audio":
+            return lower_name.endswith(audio_exts)
+        return False
+
     for item_name in items:
         item_path = os.path.join(gallery_path, item_name)
         
@@ -197,7 +223,7 @@ async def get_gallery_files(request: web.Request) -> web.Response:
                 "subfolder": os.path.join(subfolder, item_name),
                 "mod_time": mod_time
             })
-        elif item_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.mp3', '.wav', '.flac')):
+        elif _matches_file_type(item_name):
             mod_time = os.path.getmtime(item_path)
 
             gallery_items.append({
@@ -207,8 +233,13 @@ async def get_gallery_files(request: web.Request) -> web.Response:
                 "mod_time": mod_time
             })
 
-    # Sort items: directories first, then by modification time
-    gallery_items.sort(key=lambda x: (x['type'] == 'directory', x.get('mod_time', 0)), reverse=True)
+    # Sort items: keep directories first, then sort each group by modification time.
+    directories = [item for item in gallery_items if item["type"] == "directory"]
+    files = [item for item in gallery_items if item["type"] != "directory"]
+    reverse_sort = sort_order == "date_desc"
+    directories.sort(key=lambda x: x.get('mod_time', 0), reverse=reverse_sort)
+    files.sort(key=lambda x: x.get('mod_time', 0), reverse=reverse_sort)
+    gallery_items = directories + files
 
     # Pagination
     total_items = len(gallery_items)

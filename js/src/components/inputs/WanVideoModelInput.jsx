@@ -1,19 +1,16 @@
 import React from 'react';
+import SearchableSelect from '../SearchableSelect';
 
 const SelectField = ({ label, value, onChange, choices }) => (
   <div className="flex flex-col gap-1">
     <span className="text-xs text-gray-400">{label}</span>
-    <select
-      className="block w-full p-2.5 border border-base-300 bg-base-100 text-white rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-accent focus:border-accent transition-all disabled:bg-base-300/50 disabled:cursor-not-allowed disabled:text-gray-400"
+    <SearchableSelect
+      className="w-full"
+      buttonClassName="block w-full p-2.5 border border-base-300 bg-base-100 text-white rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-accent focus:border-accent transition-all disabled:bg-base-300/50 disabled:cursor-not-allowed disabled:text-gray-400"
       value={value}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {Array.isArray(choices) && choices.map((choice) => (
-        <option key={choice} value={choice}>
-          {choice}
-        </option>
-      ))}
-    </select>
+      onChange={onChange}
+      options={choices}
+    />
   </div>
 );
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getGallery, uploadImage } from '../api';
+import SearchableSelect from './SearchableSelect';
 
 const ImageInput = ({ input, value, onFormChange }) => {
     const [imageSource, setImageSource] = useState(value?.source || 'Upload'); // 'Upload' or 'Gallery'
@@ -40,8 +41,7 @@ const ImageInput = ({ input, value, onFormChange }) => {
         }
     }, [value, imageSource, input.class_type]);
 
-    const handleImageSourceChange = (e) => {
-        const newSource = e.target.value;
+    const handleImageSourceChange = (newSource) => {
         setImageSource(newSource);
         // Clear relevant states when switching source
         setSelectedGalleryImage('');
@@ -67,8 +67,7 @@ const ImageInput = ({ input, value, onFormChange }) => {
         }
     };
 
-    const handleGallerySelect = (e) => {
-        const selectedFilename = e.target.value;
+    const handleGallerySelect = (selectedFilename) => {
         setSelectedGalleryImage(selectedFilename);
         const selectedItem = galleryItems.find(item => item.filename === selectedFilename);
         if (selectedItem) {
@@ -180,14 +179,16 @@ const ImageInput = ({ input, value, onFormChange }) => {
                 // Existing UI for other image input types
                 <>
                     <div className="flex items-center space-x-2 mb-4">
-                        <select
-                            className="select select-bordered w-full max-w-xs"
+                        <SearchableSelect
+                            className="w-full max-w-xs"
+                            buttonClassName="select select-bordered w-full max-w-xs bg-base-100 text-left"
                             value={imageSource}
                             onChange={handleImageSourceChange}
-                        >
-                            <option value="Upload">Upload Image</option>
-                            <option value="Gallery">Select from Gallery</option>
-                        </select>
+                            options={[
+                                { value: 'Upload', label: 'Upload Image' },
+                                { value: 'Gallery', label: 'Select from Gallery' },
+                            ]}
+                        />
                         <button onClick={handleClearImage} className="btn btn-sm btn-outline">Clear</button>
                     </div>
 
@@ -210,18 +211,19 @@ const ImageInput = ({ input, value, onFormChange }) => {
                                     <button onClick={() => navigateGallery('')} className="btn btn-xs btn-ghost">Back to Root</button>
                                 )}
                             </div>
-                            <select
-                                className="select select-bordered w-full"
+                            <SearchableSelect
+                                className="w-full"
+                                buttonClassName="select select-bordered w-full bg-base-100 text-left"
                                 value={selectedGalleryImage}
                                 onChange={handleGallerySelect}
-                            >
-                                <option value="">-- Select an image or directory --</option>
-                                {galleryItems.map((item, index) => (
-                                    <option key={index} value={item.filename}>
-                                        {item.type === 'directory' ? `[DIR] ${item.filename}` : item.filename}
-                                    </option>
-                                ))}
-                            </select>
+                                placeholder="-- Select an image or directory --"
+                                options={galleryItems.map((item, index) => ({
+                                    value: item.filename,
+                                    label: item.type === 'directory' ? `[DIR] ${item.filename}` : item.filename,
+                                    searchText: `${item.filename} ${item.type}`,
+                                    _key: index,
+                                }))}
+                            />
                             {selectedGalleryImage && galleryItems.find(item => item.filename === selectedGalleryImage && item.type === 'directory') && (
                                 <button onClick={() => navigateGallery(selectedGalleryImage)} className="btn btn-sm btn-primary mt-2">Open Directory</button>
                             )}

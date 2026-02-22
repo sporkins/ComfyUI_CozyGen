@@ -2,8 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getHistory, getThumbUrl, getViewUrl, getCozyHistoryList } from '../api';
 import LazyMedia from './LazyMedia';
+import SearchableSelect from './SearchableSelect';
 
 const HISTORY_SELECTION_KEY = 'historySelection';
+const HISTORY_SORT_KEY = 'historySortOrder';
+const HISTORY_SORT_OPTIONS = [
+  { value: 'date_desc', label: 'Date: Newest first' },
+  { value: 'date_asc', label: 'Date: Oldest first' },
+];
 
 const isVideo = (url) => /\.(mp4|webm)/i.test(url);
 const isGif = (url) => /\.(gif)/i.test(url);
@@ -43,6 +49,7 @@ const HistoryTab = () => {
   const navigate = useNavigate();
   const [historyItems, setHistoryItems] = useState([]);
   const [historyOutputs, setHistoryOutputs] = useState({});
+  const [sortOrder, setSortOrder] = useState(localStorage.getItem(HISTORY_SORT_KEY) || 'date_desc');
 
   useEffect(() => {
     const loadHistory = async () => {
@@ -57,6 +64,10 @@ const HistoryTab = () => {
 
     loadHistory();
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(HISTORY_SORT_KEY, sortOrder);
+  }, [sortOrder]);
 
   useEffect(() => {
     if (historyItems.length === 0) {
@@ -88,7 +99,24 @@ const HistoryTab = () => {
     fetchOutputs();
   }, [historyItems]);
 
-  const sortedHistoryItems = useMemo(() => [...historyItems].reverse(), [historyItems]);
+  const sortedHistoryItems = useMemo(() => {
+    const parseTimestamp = (item) => {
+      const ts = item?.timestamp;
+      const parsed = ts ? new Date(ts).getTime() : 0;
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const nextItems = [...historyItems];
+    nextItems.sort((a, b) => {
+      const diff = parseTimestamp(a) - parseTimestamp(b);
+      if (diff !== 0) {
+        return sortOrder === 'date_desc' ? -diff : diff;
+      }
+      // Stable fallback for equal/missing timestamps.
+      return String(a?.id ?? '').localeCompare(String(b?.id ?? ''));
+    });
+    return nextItems;
+  }, [historyItems, sortOrder]);
 
   const handleHistoryClick = (item) => {
     localStorage.setItem(HISTORY_SELECTION_KEY, JSON.stringify(item));
@@ -105,6 +133,18 @@ const HistoryTab = () => {
 
   return (
     <div className="space-y-4 pb-8">
+      <div className="bg-base-200 shadow-lg rounded-lg p-3 flex flex-wrap items-center gap-2">
+        <span className="text-sm text-gray-400 whitespace-nowrap">Sort:</span>
+        <SearchableSelect
+          id="history-sort-order"
+          className="w-48 sm:w-56"
+          buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
+          value={sortOrder}
+          onChange={setSortOrder}
+          options={HISTORY_SORT_OPTIONS}
+          listMaxHeightClassName="max-h-40"
+        />
+      </div>
       {sortedHistoryItems.map((item) => {
         const historyEntry = historyOutputs[item.id];
         const mediaItems = extractHistoryMedia(historyEntry);

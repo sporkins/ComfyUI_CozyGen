@@ -178,8 +178,19 @@ export const getObjectInfo = async () => {
   return response.json();
 };
 
-export const getGallery = async (subfolder = '', page = 1, pageSize = 20) => {
-    const response = await fetch(`/cozygen/gallery?subfolder=${encodeURIComponent(subfolder)}&page=${page}&per_page=${pageSize}`);
+export const getGallery = async (subfolder = '', page = 1, pageSize = 20, options = {}) => {
+    const params = new URLSearchParams({
+      subfolder,
+      page: String(page),
+      per_page: String(pageSize),
+    });
+    if (options?.fileType) {
+      params.set('file_type', String(options.fileType));
+    }
+    if (options?.sort) {
+      params.set('sort', String(options.sort));
+    }
+    const response = await fetch(`/cozygen/gallery?${params.toString()}`);
     if (!response.ok) {
         throw new Error('Failed to fetch gallery items');
     }

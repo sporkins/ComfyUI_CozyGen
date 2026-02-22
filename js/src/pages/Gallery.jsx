@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getGallery } from '../api';
 import GalleryItem from '../components/GalleryItem';
+import SearchableSelect from '../components/SearchableSelect';
 import Modal from 'react-modal'; // Using react-modal for accessibility
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 
@@ -37,6 +38,16 @@ Modal.setAppElement('#root');
 
 const isVideo = (filename) => /\.(mp4|webm)$/i.test(filename);
 const isAudio = (filename) => /\.(mp3|wav|flac)$/i.test(filename);
+const FILE_TYPE_FILTER_OPTIONS = [
+    { value: 'all', label: 'All Files' },
+    { value: 'image', label: 'Images' },
+    { value: 'video', label: 'Videos' },
+    { value: 'audio', label: 'Audio' },
+];
+const SORT_OPTIONS = [
+    { value: 'date_desc', label: 'Date: Newest first' },
+    { value: 'date_asc', label: 'Date: Oldest first' },
+];
 
 const Gallery = () => {
     const [items, setItems] = useState([]);
@@ -46,11 +57,16 @@ const Gallery = () => {
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [pageSize, setPageSize] = useState(parseInt(localStorage.getItem('galleryPageSize'), 10) || 20);
+    const [fileTypeFilter, setFileTypeFilter] = useState(localStorage.getItem('galleryFileTypeFilter') || 'all');
+    const [sortOrder, setSortOrder] = useState(localStorage.getItem('gallerySortOrder') || 'date_desc');
 
     useEffect(() => {
         const fetchGallery = async () => {
             try {
-                const galleryData = await getGallery(path, page, pageSize);
+                const galleryData = await getGallery(path, page, pageSize, {
+                    fileType: fileTypeFilter,
+                    sort: sortOrder,
+                });
                 if (galleryData && galleryData.items) {
                     setItems(galleryData.items);
                     setTotalPages(galleryData.total_pages);
@@ -66,7 +82,9 @@ const Gallery = () => {
         };
         fetchGallery();
         localStorage.setItem('galleryPath', path);
-    }, [path, page, pageSize]);
+        localStorage.setItem('galleryFileTypeFilter', fileTypeFilter);
+        localStorage.setItem('gallerySortOrder', sortOrder);
+    }, [path, page, pageSize, fileTypeFilter, sortOrder]);
 
     const handleSelect = (item) => {
         if (item.type === 'directory') {
@@ -78,11 +96,21 @@ const Gallery = () => {
         }
     };
 
-    const handlePageSizeChange = (e) => {
-        const newSize = parseInt(e.target.value, 10);
+    const handlePageSizeChange = (nextValue) => {
+        const newSize = parseInt(nextValue, 10);
         setPageSize(newSize);
         setPage(1); // Reset to first page when page size changes
         localStorage.setItem('galleryPageSize', newSize);
+    };
+
+    const handleFileTypeFilterChange = (nextValue) => {
+        setFileTypeFilter(nextValue);
+        setPage(1);
+    };
+
+    const handleSortOrderChange = (nextValue) => {
+        setSortOrder(nextValue);
+        setPage(1);
     };
 
     const handleBreadcrumbClick = (index) => {
@@ -173,7 +201,7 @@ const Gallery = () => {
                 </button>
             </div>
 
-            <div className="flex justify-center items-center space-x-4 mb-4">
+            <div className="flex flex-wrap justify-center items-center gap-3 mb-4">
                 <button
                     onClick={() => setPage(page > 1 ? page - 1 : 1)}
                     disabled={page <= 1}
@@ -191,19 +219,41 @@ const Gallery = () => {
                 >
                     Next
                 </button>
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center gap-2">
+                    <label htmlFor="gallery-file-type-filter" className="text-sm whitespace-nowrap">Type:</label>
+                    <SearchableSelect
+                        id="gallery-file-type-filter"
+                        className="w-40 sm:w-48"
+                        buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
+                        value={fileTypeFilter}
+                        onChange={handleFileTypeFilterChange}
+                        options={FILE_TYPE_FILTER_OPTIONS}
+                        listMaxHeightClassName="max-h-48"
+                    />
+                </div>
+                <div className="flex items-center gap-2">
+                    <label htmlFor="gallery-sort-order" className="text-sm whitespace-nowrap">Sort:</label>
+                    <SearchableSelect
+                        id="gallery-sort-order"
+                        className="w-44 sm:w-56"
+                        buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
+                        value={sortOrder}
+                        onChange={handleSortOrderChange}
+                        options={SORT_OPTIONS}
+                        listMaxHeightClassName="max-h-48"
+                    />
+                </div>
+                <div className="flex items-center gap-2">
                     <label htmlFor="page-size-selector" className="text-sm">Per Page:</label>
-                    <select
+                    <SearchableSelect
                         id="page-size-selector"
-                        className="select select-bordered select-sm bg-base-100"
+                        className="w-24"
+                        buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
                         value={pageSize}
                         onChange={handlePageSizeChange}
-                    >
-                        <option value={10}>10</option>
-                        <option value={20}>20</option>
-                        <option value={50}>50</option>
-                        <option value={100}>100</option>
-                    </select>
+                        options={[10, 20, 50, 100]}
+                        listMaxHeightClassName="max-h-40"
+                    />
                 </div>
             </div>
 
