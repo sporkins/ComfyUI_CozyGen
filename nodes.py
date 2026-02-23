@@ -181,6 +181,19 @@ class CozyGenPriorityManager:
         return ()
 
 
+class CozyGenControlPanel:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {}}
+
+    RETURN_TYPES = ()
+    FUNCTION = "panel"
+    CATEGORY = "CozyGen/Flow"
+
+    def panel(self):
+        return ()
+
+
 class CozyGenImageInput(ComfyNodeABC):
     @classmethod
     def INPUT_TYPES(s) -> InputTypeDict:
@@ -1024,7 +1037,8 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenBoolInput": CozyGenBoolInput,
     "CozyGenConditionalInterrupt": CozyGenConditionalInterrupt,
     "CozyGenEnd": CozyGenEnd,
-    "CozyGenPriorityManager": CozyGenPriorityManager
+    "CozyGenPriorityManager": CozyGenPriorityManager,
+    "CozyGenControlPanel": CozyGenControlPanel,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1047,6 +1061,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenBoolInput": "CozyGen Bool Input",
     "CozyGenConditionalInterrupt": "CozyGen Conditional Interrupt",
     "CozyGenEnd": "CozyGen End",
-    "CozyGenPriorityManager": "CozyGen Priority Manager"
+    "CozyGenPriorityManager": "CozyGen Priority Manager",
+    "CozyGenControlPanel": "CozyGen Control Panel",
 }
 
