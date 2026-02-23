@@ -8,7 +8,19 @@ import LoraMultiInput from './inputs/LoraMultiInput';
 import WanVideoModelInput from './inputs/WanVideoModelInput';
 import SeedInput from './inputs/SeedInput';
 
-const renderInput = (input, formData, onFormChange, randomizeState, onRandomizeToggle, bypassedState, onBypassToggle) => {
+const getInputCollapseKey = (input) => String(input?.id ?? input?.inputs?.param_name ?? '');
+
+const renderInput = (
+    input,
+    formData,
+    onFormChange,
+    randomizeState,
+    onRandomizeToggle,
+    bypassedState,
+    onBypassToggle,
+    collapsedInputs,
+    onToggleCollapse
+) => {
     
     const { id, inputs } = input;
     const param_name = inputs['param_name'];
@@ -17,6 +29,8 @@ const renderInput = (input, formData, onFormChange, randomizeState, onRandomizeT
     const value = formData[param_name] !== undefined ? formData[param_name] : defaultValue;
     const displayBypass = inputs['display_bypass']; // Get the display_bypass property
     const isBypassed = bypassedState[param_name] || false; // Get current bypass state
+    const collapseKey = getInputCollapseKey(input);
+    const isCollapsed = Boolean(collapsedInputs?.[collapseKey]);
 
     let inputComponent;
 
@@ -106,9 +120,9 @@ const renderInput = (input, formData, onFormChange, randomizeState, onRandomizeT
     }
 
     return (
-        <div className="flex flex-col"> {/* Use flex-col to stack label/bypass and input */}
-            <div className="flex justify-between items-center mb-1"> {/* Flex for label and bypass toggle */}
-                <label className="block text-sm font-medium text-gray-300">
+        <div className="flex flex-col rounded-lg border border-base-300/70 bg-base-300/20 p-3">
+            <div className={`flex justify-between items-start gap-2 ${isCollapsed ? '' : 'mb-2'}`}>
+                <label className="block text-sm font-medium text-gray-300 flex-1 min-w-0">
                     {param_name}
                     {inputs['add_randomize_toggle'] && (
                         <span className="ml-2 text-xs text-gray-400">
@@ -133,13 +147,31 @@ const renderInput = (input, formData, onFormChange, randomizeState, onRandomizeT
                         </span>
                     )}
                 </label>
+                <button
+                    type="button"
+                    className="btn btn-ghost btn-xs shrink-0"
+                    aria-expanded={!isCollapsed}
+                    onClick={() => onToggleCollapse?.(collapseKey)}
+                >
+                    {isCollapsed ? 'Expand' : 'Collapse'}
+                </button>
             </div>
-            {inputComponent}
+            {!isCollapsed && inputComponent}
         </div>
     );
 };
 
-const DynamicForm = ({ inputs, formData, onFormChange, randomizeState, onRandomizeToggle, bypassedState, onBypassToggle }) => {
+const DynamicForm = ({
+  inputs,
+  formData,
+  onFormChange,
+  randomizeState,
+  onRandomizeToggle,
+  bypassedState,
+  onBypassToggle,
+  collapsedInputs,
+  onToggleCollapse,
+}) => {
   if (!inputs || inputs.length === 0) {
     return (
         <div className="bg-base-200 shadow-lg rounded-lg p-3 text-center">
@@ -153,7 +185,9 @@ const DynamicForm = ({ inputs, formData, onFormChange, randomizeState, onRandomi
       <h2 className="text-lg font-semibold text-white mb-2">Controls</h2>
       <div className="grid grid-cols-1 xs:grid-cols-2 gap-x-4 gap-y-4">
         {inputs.map(input => (
-            <div key={input.id} className={(input.inputs['Multiline'] || ['LORA', 'LORA_MULTI', 'WANVIDEO_MODEL'].includes(input.inputs.param_type)) ? 'xs:col-span-2' : ''}>{renderInput(input, formData, onFormChange, randomizeState, onRandomizeToggle, bypassedState, onBypassToggle)}</div>
+            <div key={input.id} className={(input.inputs['Multiline'] || ['LORA', 'LORA_MULTI', 'WANVIDEO_MODEL'].includes(input.inputs.param_type)) ? 'xs:col-span-2' : ''}>
+                {renderInput(input, formData, onFormChange, randomizeState, onRandomizeToggle, bypassedState, onBypassToggle, collapsedInputs, onToggleCollapse)}
+            </div>
         ))}
       </div>
     </div>

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getGallery, uploadImage } from '../api';
 import SearchableSelect from './SearchableSelect';
 
-const ImageInput = ({ input, value, onFormChange }) => {
+const ImageInput = ({ input, value, onFormChange, collapsed = false, onToggleCollapse }) => {
     const [imageSource, setImageSource] = useState(value?.source || 'Upload'); // 'Upload' or 'Gallery'
     const [selectedGalleryImage, setSelectedGalleryImage] = useState(value?.path || '');
     const [uploadedFile, setUploadedFile] = useState(null);
@@ -146,11 +146,19 @@ const ImageInput = ({ input, value, onFormChange }) => {
 
     return (
         <div className="form-control mb-4 p-3 bg-base-200 rounded-box shadow-lg">
-            <label className="label">
+            <div className="label py-0 mb-2">
                 <span className="label-text text-lg font-semibold">{input.inputs.param_name}</span>
-            </label>
+                <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    aria-expanded={!collapsed}
+                    onClick={() => onToggleCollapse?.()}
+                >
+                    {collapsed ? 'Expand' : 'Collapse'}
+                </button>
+            </div>
 
-            {input.class_type === 'CozyGenImageInput' ? (
+            {!collapsed && (input.class_type === 'CozyGenImageInput' ? (
                 <div className="flex flex-col sm:flex-row items-center gap-4 mb-4">
                     {/* Left Column: File Input and Smart Resize */}
                     <div className="flex-grow w-full sm:w-auto">
@@ -236,7 +244,7 @@ const ImageInput = ({ input, value, onFormChange }) => {
                         </div>
                     )}
                 </>
-            )}
+            ))}
         </div>
     );
 };

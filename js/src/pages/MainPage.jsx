@@ -38,6 +38,17 @@ const customStyles = {
   }
 };
 
+const noteModalStyles = {
+  content: {
+    ...customStyles.content,
+    backgroundColor: '#1F2937',
+    padding: '0',
+    maxWidth: '720px',
+    width: '90vw',
+  },
+  overlay: customStyles.overlay,
+};
+
 Modal.setAppElement('#root');
 
 const renderPreviewContent = (url) => {
@@ -79,6 +90,20 @@ const findNodesByType = (workflow, type) => {
     return nodes.filter(node => node.class_type === type);
 };
 
+const getWorkflowNotes = (workflow) => {
+  return findNodesByType(workflow, 'CozyGenNote')
+    .map((node) => {
+      const title = String(node?.inputs?.title ?? '').trim();
+      const note = String(node?.inputs?.note ?? '');
+      return {
+        id: String(node.id),
+        title: title || `Note ${node.id}`,
+        note,
+      };
+    })
+    .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+};
+
 const choiceTypeMapping = {
   "clip_name1": "clip",
   "clip_name2": "clip",
@@ -118,6 +143,22 @@ const COZYGEN_INPUT_TYPES = [
     'CozyGenWanVideoModelSelector',
     'CozyGenBoolInput'
 ];
+const getCozyInputCollapseKey = (input) => String(input?.id ?? input?.inputs?.param_name ?? '');
+const getCollapsedStateStorageKey = (workflowName) => (
+  workflowName ? `${workflowName}_collapsedInputNodes` : ''
+);
+const readCollapsedStateForWorkflow = (workflowName) => {
+  if (!workflowName) return {};
+  try {
+    const raw = localStorage.getItem(getCollapsedStateStorageKey(workflowName));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    console.warn('CozyGen: failed to read collapsed input state from localStorage.', error);
+    return {};
+  }
+};
 
 const readPresetStore = () => {
   try {
@@ -168,6 +209,7 @@ function App() {
   const [formData, setFormData] = useState({});
   const [randomizeState, setRandomizeState] = useState({});
   const [bypassedState, setBypassedState] = useState({});
+  const [collapsedInputNodes, setCollapsedInputNodes] = useState({});
   const [presetsByWorkflow, setPresetsByWorkflow] = useState(() => readPresetStore());
   const [selectedPresetName, setSelectedPresetName] = useState('');
   const [presetNameInput, setPresetNameInput] = useState('');
@@ -178,15 +220,23 @@ function App() {
   const [progressValue, setProgressValue] = useState(0);
   const [progressMax, setProgressMax] = useState(0);
   const [modalIsOpen, setModalIsOpen] = useState(false);
+  const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
+  const [selectedNoteId, setSelectedNoteId] = useState('');
   const [statusText, setStatusText] = useState('Generating...');
   const [queueRemaining, setQueueRemaining] = useState(null);
   const workflowDataRef = useRef(null);
   const skipWorkflowFetchRef = useRef(false);
   const videoPreviewEntriesRef = useRef({});
   const runIdRef = useRef('');
+  const skipNextCollapsedStateSaveRef = useRef(false);
 
   useEffect(() => {
     workflowDataRef.current = workflowData;
+  }, [workflowData]);
+
+  useEffect(() => {
+    setSelectedNoteId('');
+    setIsNoteModalOpen(false);
   }, [workflowData]);
 
   useEffect(() => {
@@ -255,6 +305,51 @@ function App() {
     const firstPresetName = [...presetNames].sort((a, b) => a.localeCompare(b))[0] || '';
     setSelectedPresetName(firstPresetName);
   }, [selectedWorkflow, presetsByWorkflow, selectedPresetName]);
+
+  useEffect(() => {
+    setCollapsedInputNodes((prev) => {
+      const next = {};
+      for (const input of dynamicInputs) {
+        const key = getCozyInputCollapseKey(input);
+        if (!key) continue;
+        next[key] = Boolean(prev[key]);
+      }
+
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      const unchanged =
+        prevKeys.length === nextKeys.length &&
+        nextKeys.every((key) => prev[key] === next[key]);
+
+      return unchanged ? prev : next;
+    });
+  }, [dynamicInputs]);
+
+  useEffect(() => {
+    if (!selectedWorkflow) {
+      skipNextCollapsedStateSaveRef.current = true;
+      setCollapsedInputNodes({});
+      return;
+    }
+    skipNextCollapsedStateSaveRef.current = true;
+    setCollapsedInputNodes(readCollapsedStateForWorkflow(selectedWorkflow));
+  }, [selectedWorkflow]);
+
+  useEffect(() => {
+    if (!selectedWorkflow) return;
+    if (skipNextCollapsedStateSaveRef.current) {
+      skipNextCollapsedStateSaveRef.current = false;
+      return;
+    }
+    try {
+      localStorage.setItem(
+        getCollapsedStateStorageKey(selectedWorkflow),
+        JSON.stringify(collapsedInputNodes || {})
+      );
+    } catch (error) {
+      console.warn('CozyGen: failed to save collapsed input state to localStorage.', error);
+    }
+  }, [selectedWorkflow, collapsedInputNodes]);
 
   const buildInputNames = (inputs) => new Set(inputs.map((input) => input.inputs.param_name));
 
@@ -491,6 +586,11 @@ function App() {
   const openModalWithImage = (imageSrc) => {
     setSelectedPreviewImage(imageSrc);
     setModalIsOpen(true);
+  };
+
+  const closeNoteModal = () => {
+    setIsNoteModalOpen(false);
+    setSelectedNoteId('');
   };
 
   // --- WebSocket Connection ---
@@ -796,6 +896,7 @@ function App() {
     localStorage.setItem('selectedWorkflow', workflow);
     setWorkflowData(null);
     setDynamicInputs([]);
+    setCollapsedInputNodes({});
     setFormData({});
     setRandomizeState({});
     setPreviewImages([]);
@@ -819,6 +920,24 @@ function App() {
     const newBypassedState = { ...bypassedState, [inputName]: isBypassed };
     setBypassedState(newBypassedState);
     localStorage.setItem(`${selectedWorkflow}_bypassedState`, JSON.stringify(newBypassedState));
+  };
+
+  const handleToggleInputCollapse = (inputKey) => {
+    if (!inputKey) return;
+    setCollapsedInputNodes((prev) => ({
+      ...prev,
+      [inputKey]: !prev[inputKey],
+    }));
+  };
+
+  const setAllInputNodesCollapsed = (collapsed) => {
+    const nextState = {};
+    dynamicInputs.forEach((input) => {
+      const key = getCozyInputCollapseKey(input);
+      if (!key) return;
+      nextState[key] = collapsed;
+    });
+    setCollapsedInputNodes(nextState);
   };
 
   const handleSavePreset = async () => {
@@ -1220,8 +1339,39 @@ function App() {
     localStorage.removeItem('lastPreviewImages');
   };
 
+  const controlInputs = dynamicInputs
+    .filter(input => input.class_type !== 'CozyGenImageInput')
+    .map(input => {
+      if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenSeedInput', 'CozyGenRandomNoiseInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenWanVideoModelSelector', 'CozyGenBoolInput'].includes(input.class_type)) {
+        let param_type = input.class_type.replace('CozyGen', '').replace('Input', '').toUpperCase();
+        if (param_type === 'CHOICE') {
+          param_type = 'DROPDOWN';
+        }
+        if (input.class_type === 'CozyGenRandomNoiseInput') {
+          param_type = 'SEED';
+        }
+        if (param_type === 'LORAMULTI') {
+          param_type = 'LORA_MULTI';
+        }
+        if (input.class_type === 'CozyGenWanVideoModelSelector') {
+          param_type = 'WANVIDEO_MODEL';
+        }
+        return {
+          ...input,
+          inputs: {
+            ...input.inputs,
+            param_type: param_type,
+            Multiline: input.inputs.display_multiline || false,
+          }
+        };
+      }
+      return input;
+    });
   const hasImageInput = dynamicInputs.some(input => input.class_type === 'CozyGenImageInput');
   const presetOptions = getCurrentWorkflowPresetOptions();
+  const workflowNotes = getWorkflowNotes(workflowData);
+  const workflowNoteOptions = workflowNotes.map((note) => ({ value: note.id, label: note.title }));
+  const activeWorkflowNote = workflowNotes.find((note) => String(note.id) === String(selectedNoteId)) || null;
 
   return (
     <div className="w-full">
@@ -1330,6 +1480,52 @@ function App() {
                         </button>
                     </div>
                 </div>
+                {workflowNoteOptions.length > 0 && (
+                    <div className="bg-base-200 shadow-lg rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                            <h2 className="text-lg font-semibold text-white">Workflow Notes</h2>
+                            <span className="text-xs text-gray-400">{workflowNoteOptions.length}</span>
+                        </div>
+                        <SearchableSelect
+                            id="workflow-notes-selector"
+                            className="w-full"
+                            buttonClassName="select select-bordered w-full bg-base-100 text-left"
+                            value={selectedNoteId}
+                            onChange={(noteId) => {
+                              setSelectedNoteId(String(noteId));
+                              setIsNoteModalOpen(true);
+                            }}
+                            options={workflowNoteOptions}
+                            placeholder="Select a note to view"
+                            listMaxHeightClassName="max-h-56"
+                        />
+                    </div>
+                )}
+                {dynamicInputs.length > 0 && (
+                    <div className="bg-base-200 shadow-lg rounded-lg p-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                            <div className="text-sm text-gray-300">
+                                Input Groups: <span className="font-semibold text-white">{dynamicInputs.length}</span>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setAllInputNodesCollapsed(false)}
+                                    className="btn btn-xs btn-outline"
+                                >
+                                    Expand All
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setAllInputNodesCollapsed(true)}
+                                    className="btn btn-xs btn-outline"
+                                >
+                                    Collapse All
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {/* Render ImageInput separately */}
                 {dynamicInputs.filter(input => input.class_type === 'CozyGenImageInput').map(input => (
                     <ImageInput
@@ -1339,48 +1535,22 @@ function App() {
                         onFormChange={handleFormChange}
                         onBypassToggle={handleBypassToggle}
                         disabled={bypassedState[input.inputs.param_name] || false}
+                        collapsed={Boolean(collapsedInputNodes[getCozyInputCollapseKey(input)])}
+                        onToggleCollapse={() => handleToggleInputCollapse(getCozyInputCollapseKey(input))}
                     />
                 ))}
                 
                 {/* New, Corrected Rendering Logic */}
                 <DynamicForm
-                    inputs={dynamicInputs
-                        .filter(input => input.class_type !== 'CozyGenImageInput')
-                        .map(input => {
-                            // Map new static node properties to the format DynamicForm expects
-                            if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenSeedInput', 'CozyGenRandomNoiseInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenWanVideoModelSelector', 'CozyGenBoolInput'].includes(input.class_type)) {
-                                let param_type = input.class_type.replace('CozyGen', '').replace('Input', '').toUpperCase();
-                                if (param_type === 'CHOICE') {
-                                    param_type = 'DROPDOWN'; // Map Choice to Dropdown
-                                }
-                                if (input.class_type === 'CozyGenRandomNoiseInput') {
-                                    param_type = 'SEED';
-                                }
-                                if (param_type === 'LORAMULTI') {
-                                    param_type = 'LORA_MULTI';
-                                }
-                                if (input.class_type === 'CozyGenWanVideoModelSelector') {
-                                    param_type = 'WANVIDEO_MODEL';
-                                }
-                                return {
-                                    ...input,
-                                    inputs: {
-                                        ...input.inputs,
-                                        param_type: param_type,
-                                        // Conform to the expected 'Multiline' prop
-                                        Multiline: input.inputs.display_multiline || false, 
-                                    }
-                                };
-                            }
-                            return input; // Return original CozyGenDynamicInput as is
-                        })
-                    }
+                    inputs={controlInputs}
                     formData={formData}
                     onFormChange={handleFormChange}
                     randomizeState={randomizeState}
                     onRandomizeToggle={handleRandomizeToggle}
                     bypassedState={bypassedState}
                     onBypassToggle={handleBypassToggle}
+                    collapsedInputs={collapsedInputNodes}
+                    onToggleCollapse={handleToggleInputCollapse}
                 />
 
                 
@@ -1442,6 +1612,39 @@ function App() {
                         >
                             Close
                         </button>
+                    </div>
+                </div>
+            </Modal>
+        )}
+
+        {/* Workflow Note Modal */}
+        {activeWorkflowNote && (
+            <Modal
+                isOpen={isNoteModalOpen}
+                onRequestClose={closeNoteModal}
+                style={noteModalStyles}
+                contentLabel="Workflow Note"
+            >
+                <div className="flex flex-col max-h-[85vh]">
+                    <div className="flex items-start justify-between gap-3 p-4 border-b border-base-300">
+                        <h3 className="text-lg font-semibold text-white break-words">
+                            {activeWorkflowNote.title}
+                        </h3>
+                        <button
+                            type="button"
+                            onClick={closeNoteModal}
+                            className="btn btn-ghost btn-sm shrink-0"
+                            aria-label="Close note"
+                        >
+                            X
+                        </button>
+                    </div>
+                    <div className="p-4 overflow-auto">
+                        <div className="whitespace-pre-wrap text-sm text-gray-100 leading-relaxed">
+                            {activeWorkflowNote.note?.trim()
+                              ? activeWorkflowNote.note
+                              : 'This note is empty.'}
+                        </div>
                     </div>
                 </div>
             </Modal>

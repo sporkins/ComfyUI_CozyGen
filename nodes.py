@@ -998,6 +998,24 @@ class CozyGenWanVideoModelSelector:
         final_model = model_name if model_name in model_choices else "none"
         return (str(final_model), str(base_precision), str(quantization), str(load_device))
 
+class CozyGenNote:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "title": (IO.STRING, {"default": "Note"}),
+                "note": (IO.STRING, {"default": "", "multiline": True}),
+            }
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "noop"
+    CATEGORY = "CozyGen/Static"
+    DESCRIPTION = "Workflow note shown in CozyGen Generate tab."
+
+    def noop(self, title, note):
+        return ()
+
 class CozyGenMetaText(ComfyNodeABC):
     _NODE_CLASS_NAME = "CozyGenMetaText"
     
@@ -1033,6 +1051,7 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenLoraInput": CozyGenLoraInput,
     "CozyGenLoraInputMulti": CozyGenLoraInputMulti,
     "CozyGenWanVideoModelSelector": CozyGenWanVideoModelSelector,
+    "CozyGenNote": CozyGenNote,
     "CozyGenMetaText": CozyGenMetaText,
     "CozyGenBoolInput": CozyGenBoolInput,
     "CozyGenConditionalInterrupt": CozyGenConditionalInterrupt,
@@ -1057,6 +1076,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenLoraInput": "CozyGen Lora Input",
     "CozyGenLoraInputMulti": "CozyGen Lora Input Multi",
     "CozyGenWanVideoModelSelector": "CozyGen WanVideo Model Selector",
+    "CozyGenNote": "CozyGen Note",
     "CozyGenMetaText": "CozyGen Meta Text",
     "CozyGenBoolInput": "CozyGen Bool Input",
     "CozyGenConditionalInterrupt": "CozyGen Conditional Interrupt",
