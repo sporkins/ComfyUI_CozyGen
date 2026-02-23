@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import WorkflowSelector from '../components/WorkflowSelector';
 import DynamicForm from '../components/DynamicForm';
 import ImageInput from '../components/ImageInput'; // Import ImageInput
-import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getViewUrl, getObjectInfo, saveCozyHistoryItem, updateCozyHistoryItem, getCozySession, saveCozySession } from '../api';
+import SearchableSelect from '../components/SearchableSelect';
+import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getViewUrl, getObjectInfo, saveCozyHistoryItem, updateCozyHistoryItem, getCozySession, saveCozySession, getCozyPresets, saveCozyPresets } from '../api';
 import Modal from 'react-modal';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 
@@ -102,6 +103,7 @@ const WANVIDEO_QUANTIZATIONS = [
 ];
 const WANVIDEO_LOAD_DEVICES = ["main_device", "offload_device"];
 const HISTORY_SELECTION_KEY = 'historySelection';
+const PRESET_STORAGE_KEY = 'cozygenWorkflowPresetsV1';
 const COZYGEN_INPUT_TYPES = [
     'CozyGenDynamicInput', 
     'CozyGenImageInput', 
@@ -117,6 +119,45 @@ const COZYGEN_INPUT_TYPES = [
     'CozyGenBoolInput'
 ];
 
+const readPresetStore = () => {
+  try {
+    const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    console.warn('CozyGen: failed to read presets from localStorage.', error);
+    return {};
+  }
+};
+
+const clearLegacyPresetStore = () => {
+  localStorage.removeItem(PRESET_STORAGE_KEY);
+};
+
+const mergePresetStores = (serverStore, localStore) => {
+  const safeServer = serverStore && typeof serverStore === 'object' ? serverStore : {};
+  const safeLocal = localStore && typeof localStore === 'object' ? localStore : {};
+  const workflowNames = new Set([...Object.keys(safeLocal), ...Object.keys(safeServer)]);
+  const merged = {};
+
+  for (const workflowName of workflowNames) {
+    const localWorkflowPresets =
+      safeLocal[workflowName] && typeof safeLocal[workflowName] === 'object' ? safeLocal[workflowName] : {};
+    const serverWorkflowPresets =
+      safeServer[workflowName] && typeof safeServer[workflowName] === 'object' ? safeServer[workflowName] : {};
+    const mergedWorkflowPresets = {
+      ...localWorkflowPresets,
+      ...serverWorkflowPresets,
+    };
+    if (Object.keys(mergedWorkflowPresets).length > 0) {
+      merged[workflowName] = mergedWorkflowPresets;
+    }
+  }
+
+  return merged;
+};
+
 function App() {
   const [workflows, setWorkflows] = useState([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState(
@@ -127,6 +168,9 @@ function App() {
   const [formData, setFormData] = useState({});
   const [randomizeState, setRandomizeState] = useState({});
   const [bypassedState, setBypassedState] = useState({});
+  const [presetsByWorkflow, setPresetsByWorkflow] = useState(() => readPresetStore());
+  const [selectedPresetName, setSelectedPresetName] = useState('');
+  const [presetNameInput, setPresetNameInput] = useState('');
   const [previewImages, setPreviewImages] = useState(JSON.parse(localStorage.getItem('lastPreviewImages')) || []);
   const [selectedPreviewImage, setSelectedPreviewImage] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -145,11 +189,88 @@ function App() {
     workflowDataRef.current = workflowData;
   }, [workflowData]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPresetsFromServer = async () => {
+      let serverStore = {};
+      try {
+        const response = await getCozyPresets();
+        serverStore = response?.items && typeof response.items === 'object' ? response.items : {};
+      } catch (error) {
+        console.warn('CozyGen: failed to load presets from server, using local fallback if available.', error);
+        return;
+      }
+
+      const legacyLocalStore = readPresetStore();
+      const mergedStore = mergePresetStores(serverStore, legacyLocalStore);
+
+      if (!cancelled) {
+        setPresetsByWorkflow(mergedStore);
+      }
+
+      const hasLegacyPresets = Object.keys(legacyLocalStore).length > 0;
+      const needsMigrationSync =
+        hasLegacyPresets && JSON.stringify(mergedStore) !== JSON.stringify(serverStore);
+
+      if (!needsMigrationSync) {
+        if (hasLegacyPresets) {
+          clearLegacyPresetStore();
+        }
+        return;
+      }
+
+      try {
+        const saveResponse = await saveCozyPresets(mergedStore);
+        const persistedStore =
+          saveResponse?.items && typeof saveResponse.items === 'object' ? saveResponse.items : mergedStore;
+        if (!cancelled) {
+          setPresetsByWorkflow(persistedStore);
+        }
+        clearLegacyPresetStore();
+      } catch (error) {
+        console.warn('CozyGen: failed to migrate local presets to server.', error);
+      }
+    };
+
+    loadPresetsFromServer();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedWorkflow) {
+      setSelectedPresetName('');
+      return;
+    }
+
+    const presetEntries = presetsByWorkflow?.[selectedWorkflow] || {};
+    const presetNames = Object.keys(presetEntries);
+    if (selectedPresetName && presetNames.includes(selectedPresetName)) {
+      return;
+    }
+
+    const firstPresetName = [...presetNames].sort((a, b) => a.localeCompare(b))[0] || '';
+    setSelectedPresetName(firstPresetName);
+  }, [selectedWorkflow, presetsByWorkflow, selectedPresetName]);
+
   const buildInputNames = (inputs) => new Set(inputs.map((input) => input.inputs.param_name));
 
   const filterStateByInputs = (inputNames, stateValues) => Object.fromEntries(
     Object.entries(stateValues || {}).filter(([key]) => inputNames.has(key))
   );
+
+  const getCurrentWorkflowPresetEntries = () => {
+    if (!selectedWorkflow) return {};
+    const workflowPresets = presetsByWorkflow?.[selectedWorkflow];
+    return workflowPresets && typeof workflowPresets === 'object' ? workflowPresets : {};
+  };
+
+  const getCurrentWorkflowPresetOptions = () => Object.keys(getCurrentWorkflowPresetEntries())
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => ({ value: name, label: name }));
 
   const prepareWorkflowData = useCallback(async (data, savedFormData = {}, savedRandomizeState = {}, savedBypassedState = {}) => {
     const workflowCopy = JSON.parse(JSON.stringify(data));
@@ -700,6 +821,152 @@ function App() {
     localStorage.setItem(`${selectedWorkflow}_bypassedState`, JSON.stringify(newBypassedState));
   };
 
+  const handleSavePreset = async () => {
+    if (!selectedWorkflow || !workflowData) {
+      window.alert('Select a workflow before saving a preset.');
+      return;
+    }
+
+    const presetName = presetNameInput.trim();
+    if (!presetName) {
+      window.alert('Enter a preset name.');
+      return;
+    }
+
+    const existingPreset = presetsByWorkflow?.[selectedWorkflow]?.[presetName];
+    if (existingPreset) {
+      const overwrite = window.confirm(`Preset "${presetName}" already exists for "${selectedWorkflow}". Overwrite it?`);
+      if (!overwrite) {
+        return;
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const presetPayload = {
+      name: presetName,
+      workflowName: selectedWorkflow,
+      saved_at: nowIso,
+      created_at: existingPreset?.created_at || nowIso,
+      input_names: dynamicInputs.map((input) => input.inputs?.param_name).filter(Boolean),
+      formData: JSON.parse(JSON.stringify(formData || {})),
+      randomizeState: JSON.parse(JSON.stringify(randomizeState || {})),
+      bypassedState: JSON.parse(JSON.stringify(bypassedState || {})),
+    };
+
+    const nextStore = {
+      ...presetsByWorkflow,
+      [selectedWorkflow]: {
+        ...(presetsByWorkflow?.[selectedWorkflow] || {}),
+        [presetName]: presetPayload,
+      },
+    };
+
+    try {
+      const response = await saveCozyPresets(nextStore);
+      const persistedStore =
+        response?.items && typeof response.items === 'object' ? response.items : nextStore;
+      setPresetsByWorkflow(persistedStore);
+      setSelectedPresetName(presetName);
+      setPresetNameInput(presetName);
+      clearLegacyPresetStore();
+    } catch (error) {
+      console.warn('CozyGen: failed to save preset to server.', error);
+      window.alert('Failed to save preset to server.');
+    }
+  };
+
+  const handleLoadPreset = () => {
+    if (!selectedWorkflow) {
+      window.alert('Select a workflow before loading a preset.');
+      return;
+    }
+    if (!selectedPresetName) {
+      window.alert('Select a preset to load.');
+      return;
+    }
+
+    const preset = presetsByWorkflow?.[selectedWorkflow]?.[selectedPresetName];
+    if (!preset) {
+      window.alert(`Preset "${selectedPresetName}" was not found.`);
+      return;
+    }
+
+    const inputNames = buildInputNames(dynamicInputs);
+    const presetKeys = new Set([
+      ...Object.keys(preset.formData || {}),
+      ...Object.keys(preset.randomizeState || {}),
+      ...Object.keys(preset.bypassedState || {}),
+    ]);
+    const missingFields = [...presetKeys]
+      .filter((key) => !inputNames.has(key))
+      .sort((a, b) => a.localeCompare(b));
+
+    if (missingFields.length > 0) {
+      const visibleFields = missingFields.slice(0, 20);
+      const remainingCount = missingFields.length - visibleFields.length;
+      const proceed = window.confirm(
+        `Preset "${selectedPresetName}" has fields that do not exist in the current workflow:\n\n${visibleFields.join('\n')}${
+          remainingCount > 0 ? `\n...and ${remainingCount} more` : ''
+        }\n\nApply matching fields anyway?`
+      );
+      if (!proceed) {
+        return;
+      }
+    }
+
+    const filteredPresetFormData = filterStateByInputs(inputNames, preset.formData || {});
+    const filteredPresetRandomize = filterStateByInputs(inputNames, preset.randomizeState || {});
+    const filteredPresetBypassed = filterStateByInputs(inputNames, preset.bypassedState || {});
+
+    const nextFormData = { ...formData, ...filteredPresetFormData };
+    const nextRandomizeState = { ...randomizeState, ...filteredPresetRandomize };
+    const nextBypassedState = { ...bypassedState, ...filteredPresetBypassed };
+
+    setFormData(nextFormData);
+    setRandomizeState(nextRandomizeState);
+    setBypassedState(nextBypassedState);
+    localStorage.setItem(`${selectedWorkflow}_formData`, JSON.stringify(nextFormData));
+    localStorage.setItem(`${selectedWorkflow}_randomizeState`, JSON.stringify(nextRandomizeState));
+    localStorage.setItem(`${selectedWorkflow}_bypassedState`, JSON.stringify(nextBypassedState));
+    setPresetNameInput(selectedPresetName);
+  };
+
+  const handleDeletePreset = async () => {
+    if (!selectedWorkflow || !selectedPresetName) {
+      return;
+    }
+
+    const confirmDelete = window.confirm(`Delete preset "${selectedPresetName}" for "${selectedWorkflow}"?`);
+    if (!confirmDelete) {
+      return;
+    }
+
+    const workflowPresets = { ...(presetsByWorkflow?.[selectedWorkflow] || {}) };
+    delete workflowPresets[selectedPresetName];
+
+    const nextStore = { ...presetsByWorkflow };
+    if (Object.keys(workflowPresets).length > 0) {
+      nextStore[selectedWorkflow] = workflowPresets;
+    } else {
+      delete nextStore[selectedWorkflow];
+    }
+
+    try {
+      const response = await saveCozyPresets(nextStore);
+      const persistedStore =
+        response?.items && typeof response.items === 'object' ? response.items : nextStore;
+      setPresetsByWorkflow(persistedStore);
+      if (presetNameInput === selectedPresetName) {
+        setPresetNameInput('');
+      }
+      setSelectedPresetName('');
+      clearLegacyPresetStore();
+    } catch (error) {
+      console.warn('CozyGen: failed to delete preset on server.', error);
+      window.alert('Failed to delete preset on server.');
+    }
+  };
+
   const extractPromptId = (item) => {
     if (!item) return null;
     if (typeof item === 'string') return item;
@@ -954,6 +1221,7 @@ function App() {
   };
 
   const hasImageInput = dynamicInputs.some(input => input.class_type === 'CozyGenImageInput');
+  const presetOptions = getCurrentWorkflowPresetOptions();
 
   return (
     <div className="w-full">
@@ -1000,6 +1268,68 @@ function App() {
                   selectedWorkflow={selectedWorkflow}
                   onSelect={handleWorkflowSelect}
                 />
+                <div className="bg-base-200 shadow-lg rounded-lg p-3 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <h2 className="text-lg font-semibold text-white">Presets</h2>
+                        {selectedWorkflow ? (
+                          <span className="text-xs text-gray-400 break-all">{selectedWorkflow}</span>
+                        ) : (
+                          <span className="text-xs text-gray-500">Select a workflow to use presets</span>
+                        )}
+                    </div>
+
+                    <div className="flex flex-col lg:flex-row gap-2">
+                        <input
+                            type="text"
+                            value={presetNameInput}
+                            onChange={(event) => setPresetNameInput(event.target.value)}
+                            placeholder="Preset name"
+                            className="input input-bordered w-full"
+                            disabled={!selectedWorkflow}
+                        />
+                        <button
+                            type="button"
+                            onClick={handleSavePreset}
+                            disabled={!selectedWorkflow || !workflowData}
+                            className="btn btn-primary lg:w-auto"
+                        >
+                            Save Preset
+                        </button>
+                    </div>
+
+                    <div className="flex flex-col lg:flex-row gap-2 items-stretch">
+                        <SearchableSelect
+                            id="workflow-preset-selector"
+                            className="w-full"
+                            buttonClassName="select select-bordered w-full bg-base-100 text-left"
+                            value={selectedPresetName}
+                            onChange={(nextName) => {
+                              setSelectedPresetName(nextName);
+                              setPresetNameInput(nextName);
+                            }}
+                            options={presetOptions}
+                            placeholder={presetOptions.length > 0 ? '-- Select a preset --' : 'No presets yet'}
+                            disabled={!selectedWorkflow || presetOptions.length === 0}
+                            listMaxHeightClassName="max-h-56"
+                        />
+                        <button
+                            type="button"
+                            onClick={handleLoadPreset}
+                            disabled={!selectedWorkflow || !selectedPresetName}
+                            className="btn btn-accent lg:w-auto"
+                        >
+                            Load
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleDeletePreset}
+                            disabled={!selectedWorkflow || !selectedPresetName}
+                            className="btn btn-outline lg:w-auto"
+                        >
+                            Delete
+                        </button>
+                    </div>
+                </div>
                 {/* Render ImageInput separately */}
                 {dynamicInputs.filter(input => input.class_type === 'CozyGenImageInput').map(input => (
                     <ImageInput

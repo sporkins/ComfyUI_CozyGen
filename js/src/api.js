@@ -136,6 +136,28 @@ export const saveCozySession = async (payload) => {
   return response.json();
 };
 
+export const getCozyPresets = async () => {
+  const response = await fetch(`${BASE_URL}/presets`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch CozyGen presets');
+  }
+  return response.json();
+};
+
+export const saveCozyPresets = async (items) => {
+  const response = await fetch(`${BASE_URL}/presets`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ items }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to save CozyGen presets');
+  }
+  return response.json();
+};
+
 export const getViewUrl = (filename, subfolder = '', type = 'output', options = {}) => {
   const baseUrl = window.location.protocol + '//' + window.location.host;
   const params = new URLSearchParams({

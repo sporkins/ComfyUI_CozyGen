@@ -666,10 +666,10 @@ class CozyGenFloatInput:
             "required": {
                 "param_name": (IO.STRING, {"default": "Float Parameter"}),
                 "priority": (IO.INT, {"default": 10}),
-                "default_value": (IO.FLOAT, {"default": 1.0}),
-                "min_value": (IO.FLOAT, {"default": 0.0}),
-                "max_value": (IO.FLOAT, {"default": 1024.0}),
-                "step": (IO.FLOAT, {"default": 0.01}),
+                "default_value": (IO.FLOAT, {"default": 1.0, "step": 0.01, "round": 0.01}),
+                "min_value": (IO.FLOAT, {"default": 0.0, "step": 0.01, "round": 0.01}),
+                "max_value": (IO.FLOAT, {"default": 1024.0, "step": 0.01, "round": 0.01}),
+                "step": (IO.FLOAT, {"default": 0.01, "step": 0.01, "round": 0.01}),
                 "add_randomize_toggle": (IO.BOOLEAN, {"default": False}),
             }
         }

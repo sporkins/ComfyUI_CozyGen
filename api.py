@@ -126,6 +126,27 @@ def write_session(data: dict):
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
 
+def get_presets_path() -> str:
+    cache_dir = get_cache_dir()
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "presets.json")
+
+def load_presets():
+    path = get_presets_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def write_presets(data: dict):
+    path = get_presets_path()
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data if isinstance(data, dict) else {}, f, indent=2)
+
 @functools.lru_cache(maxsize=256)
 def build_thumbnail_bytes(path: str, mtime: float, size: int, width: int, quality: int, fmt: str):
     with Image.open(path) as img:
@@ -401,6 +422,39 @@ async def save_session(request: web.Request) -> web.Response:
     write_session(merged)
     return web.json_response({"status": "ok"})
 
+async def get_presets(request: web.Request) -> web.Response:
+    items = load_presets()
+    return web.json_response({"items": items})
+
+async def save_presets(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    if not isinstance(payload, dict):
+        return web.json_response({"error": "Invalid presets payload"}, status=400)
+
+    items = payload.get("items", payload)
+    if not isinstance(items, dict):
+        return web.json_response({"error": "Invalid presets items"}, status=400)
+
+    # Keep only object-shaped workflow maps and preset entries to avoid malformed writes.
+    sanitized_items = {}
+    for workflow_name, workflow_presets in items.items():
+        if not isinstance(workflow_name, str) or not isinstance(workflow_presets, dict):
+            continue
+        sanitized_workflow = {}
+        for preset_name, preset_data in workflow_presets.items():
+            if not isinstance(preset_name, str) or not isinstance(preset_data, dict):
+                continue
+            sanitized_workflow[preset_name] = preset_data
+        if sanitized_workflow:
+            sanitized_items[workflow_name] = sanitized_workflow
+
+    write_presets(sanitized_items)
+    return web.json_response({"status": "ok", "items": sanitized_items})
+
 async def upload_workflow_file(request: web.Request) -> web.Response:
     filename = request.match_info.get('filename', 'workflow.json')
     workflows_dir = get_workflows_dir()
@@ -506,6 +560,8 @@ routes = [
     web.post('/cozygen/history/{history_id}', update_history_item),
     web.get('/cozygen/session', get_session),
     web.post('/cozygen/session', save_session),
+    web.get('/cozygen/presets', get_presets),
+    web.post('/cozygen/presets', save_presets),
     web.post('/cozygen/upload_image', upload_image),
     web.get('/cozygen/workflows', get_workflow_list),
     web.get('/cozygen/workflows/{filename}', get_workflow_file),
