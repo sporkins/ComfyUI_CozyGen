@@ -6,6 +6,11 @@ const DEFAULT_BUTTON_CLASS =
 const DEFAULT_SEARCH_CLASS =
   'w-full px-3 py-2 rounded-md border border-base-300 bg-base-100 text-white focus:outline-none focus:ring-2 focus:ring-accent';
 
+const MENU_VIEWPORT_GAP = 8;
+const MIN_VISIBLE_LIST_HEIGHT = 80;
+const FALLBACK_MENU_CHROME_HEIGHT = 60;
+const DEFAULT_LIST_MAX_HEIGHT_PX = 240;
+
 const isOptionObject = (option) =>
   option != null &&
   typeof option === 'object' &&
@@ -127,12 +132,15 @@ const SearchableSelect = ({
   const selectId = id || fallbackId;
   const rootRef = useRef(null);
   const triggerRef = useRef(null);
+  const menuRef = useRef(null);
   const searchInputRef = useRef(null);
   const listContainerRef = useRef(null);
   const optionButtonRefs = useRef([]);
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const [menuPlacement, setMenuPlacement] = useState('bottom');
+  const [menuListMaxHeight, setMenuListMaxHeight] = useState(null);
 
   const normalizedOptions = Array.isArray(options) ? options.map(normalizeOption) : [];
   const selectedOption = normalizedOptions.find((option) => valuesMatch(option.value, value)) || null;
@@ -176,6 +184,8 @@ const SearchableSelect = ({
   useEffect(() => {
     if (!isOpen) {
       setHighlightedIndex(-1);
+      setMenuPlacement('bottom');
+      setMenuListMaxHeight(null);
       return;
     }
 
@@ -187,6 +197,76 @@ const SearchableSelect = ({
 
     setHighlightedIndex(getFirstEnabledIndex(filteredOptions));
   }, [filteredOptions, isOpen, value]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    let frameId = null;
+    const viewport = window.visualViewport;
+
+    const updateMenuLayout = () => {
+      frameId = null;
+
+      const triggerEl = triggerRef.current;
+      if (!triggerEl) return;
+
+      const triggerRect = triggerEl.getBoundingClientRect();
+      const viewportTop = viewport?.offsetTop ?? 0;
+      const viewportHeight = viewport?.height ?? window.innerHeight;
+      const viewportBottom = viewportTop + viewportHeight;
+      const availableBelow = Math.max(0, viewportBottom - triggerRect.bottom - MENU_VIEWPORT_GAP);
+      const availableAbove = Math.max(0, triggerRect.top - viewportTop - MENU_VIEWPORT_GAP);
+
+      const listEl = listContainerRef.current;
+      const menuEl = menuRef.current;
+      const listHeight = listEl?.offsetHeight ?? 0;
+      const menuHeight = menuEl?.offsetHeight ?? 0;
+      const menuChromeHeight =
+        menuHeight > 0
+          ? Math.max(0, menuHeight - listHeight)
+          : FALLBACK_MENU_CHROME_HEIGHT;
+
+      const preferredMenuHeight =
+        menuHeight > 0 ? menuHeight : menuChromeHeight + DEFAULT_LIST_MAX_HEIGHT_PX;
+      const shouldOpenAbove =
+        availableAbove > availableBelow &&
+        (availableBelow < preferredMenuHeight || availableBelow < MIN_VISIBLE_LIST_HEIGHT);
+      const nextPlacement = shouldOpenAbove ? 'top' : 'bottom';
+      const availableMenuHeight = nextPlacement === 'top' ? availableAbove : availableBelow;
+      const nextListMaxHeight = Math.max(
+        0,
+        Math.floor(availableMenuHeight - menuChromeHeight)
+      );
+
+      setMenuPlacement((current) => (current === nextPlacement ? current : nextPlacement));
+      setMenuListMaxHeight((current) =>
+        current === nextListMaxHeight ? current : nextListMaxHeight
+      );
+    };
+
+    const scheduleUpdate = () => {
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+      }
+      frameId = requestAnimationFrame(updateMenuLayout);
+    };
+
+    scheduleUpdate();
+    window.addEventListener('resize', scheduleUpdate);
+    window.addEventListener('scroll', scheduleUpdate, { passive: true });
+    viewport?.addEventListener('resize', scheduleUpdate);
+    viewport?.addEventListener('scroll', scheduleUpdate);
+
+    return () => {
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+      }
+      window.removeEventListener('resize', scheduleUpdate);
+      window.removeEventListener('scroll', scheduleUpdate);
+      viewport?.removeEventListener('resize', scheduleUpdate);
+      viewport?.removeEventListener('scroll', scheduleUpdate);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen || highlightedIndex < 0) return;
@@ -350,7 +430,10 @@ const SearchableSelect = ({
 
       {isOpen && (
         <div
-          className={`absolute left-0 z-50 mt-1 min-w-full w-max max-w-[calc(100vw-1rem)] rounded-md border border-base-300 bg-base-200 shadow-xl p-2 ${menuClassName}`.trim()}
+          ref={menuRef}
+          className={`absolute left-0 z-50 min-w-full w-max max-w-[calc(100vw-1rem)] rounded-md border border-base-300 bg-base-200 shadow-xl p-2 ${
+            menuPlacement === 'top' ? 'bottom-full mb-1' : 'mt-1'
+          } ${menuClassName}`.trim()}
         >
           <input
             ref={searchInputRef}
@@ -361,7 +444,15 @@ const SearchableSelect = ({
             placeholder={searchPlaceholder}
             className={DEFAULT_SEARCH_CLASS}
           />
-          <div ref={listContainerRef} className={`mt-2 overflow-auto ${listMaxHeightClassName}`.trim()}>
+          <div
+            ref={listContainerRef}
+            className={`mt-2 overflow-auto ${listMaxHeightClassName}`.trim()}
+            style={
+              menuListMaxHeight !== null
+                ? { maxHeight: `${Math.max(menuListMaxHeight, 0)}px` }
+                : undefined
+            }
+          >
             {filteredOptions.length === 0 ? (
               <div className="px-3 py-2 text-sm text-gray-400">No matches</div>
             ) : (
