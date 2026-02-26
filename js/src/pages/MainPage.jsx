@@ -3,9 +3,10 @@ import WorkflowSelector from '../components/WorkflowSelector';
 import DynamicForm from '../components/DynamicForm';
 import ImageInput from '../components/ImageInput'; // Import ImageInput
 import SearchableSelect from '../components/SearchableSelect';
-import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getViewUrl, getObjectInfo, saveCozyHistoryItem, updateCozyHistoryItem, getCozySession, saveCozySession, getCozyPresets, saveCozyPresets } from '../api';
+import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getViewUrl, getCozyMediaUrl, getHistory, getObjectInfo, saveCozyHistoryItem, updateCozyHistoryItem, getCozySession, saveCozySession, getCozyPresets, saveCozyPresets } from '../api';
 import Modal from 'react-modal';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
+import { extractHistoryMedia } from '../utils/historyUtils';
 
 // Modal styles (copied from Gallery.jsx for consistency)
 const isVideo = (url) => /\.(mp4|webm)/i.test(url);
@@ -655,6 +656,49 @@ function App() {
 
     websocketRef.current = new WebSocket(wsUrl);
 
+    const backfillHistoryPreviewsFromComfyHistory = async (promptId) => {
+      if (!promptId) return [];
+
+      const attemptDelays = [0, 500, 1500];
+      for (const delayMs of attemptDelays) {
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        try {
+          const historyData = await getHistory(promptId);
+          const historyEntry = historyData?.[promptId] || historyData?.history?.[promptId] || null;
+          const mediaItems = extractHistoryMedia(historyEntry);
+          const previewUrls = mediaItems.map((media) => (
+            getCozyMediaUrl(media.filename, media.subfolder, media.type)
+          ));
+          if (previewUrls.length === 0) {
+            continue;
+          }
+
+          setPreviewImages(previewUrls);
+          localStorage.setItem('lastPreviewImages', JSON.stringify(previewUrls));
+
+          updateCozyHistoryItem(promptId, { preview_images: previewUrls }).catch((error) => {
+            console.warn('CozyGen: failed to backfill history previews from ComfyUI history', error);
+          });
+          saveCozySession({
+            id: promptId,
+            status: 'finished',
+            preview_images: previewUrls,
+            updated_at: new Date().toISOString(),
+          }).catch(() => {});
+
+          return previewUrls;
+        } catch (error) {
+          if (delayMs === attemptDelays[attemptDelays.length - 1]) {
+            console.warn(`CozyGen: failed to backfill previews from ComfyUI history for ${promptId}`, error);
+          }
+        }
+      }
+
+      return [];
+    };
+
     websocketRef.current.onmessage = (event) => {
       if (typeof event.data !== 'string') {
           console.log("CozyGen: Received binary WebSocket message, ignoring.");
@@ -752,6 +796,9 @@ function App() {
               preview_images: latestPreviewImages,
               updated_at: new Date().toISOString(),
             }).catch(() => {});
+            if (!Array.isArray(latestPreviewImages) || latestPreviewImages.length === 0) {
+              void backfillHistoryPreviewsFromComfyHistory(lastPromptId);
+            }
           }
         } else if (msg.type === 'executing') {
           const nodeId = msg.data.node;
@@ -809,6 +856,9 @@ function App() {
               preview_images: latestPreviewImages,
               updated_at: new Date().toISOString(),
             }).catch(() => {});
+            if (!Array.isArray(latestPreviewImages) || latestPreviewImages.length === 0) {
+              void backfillHistoryPreviewsFromComfyHistory(activePromptId);
+            }
           }
       }
     };
@@ -1160,6 +1210,7 @@ function App() {
     if(clear) {
         setIsLoading(true);
         setPreviewImages([]); // Clear previous images
+        localStorage.removeItem('lastPreviewImages');
         videoPreviewEntriesRef.current = {};
         runIdRef.current = '';
         setStatusText('Queuing prompt...');

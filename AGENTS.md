@@ -48,6 +48,8 @@
 - Never auto-import ComfyUI-executed runs into CozyGen history by default. Always keep ComfyUI-run ingestion explicit/opt-in because backfill surprises users and creates phantom history entries after cache resets.
 - Never trust ComfyUI history media bucket counts directly. Always dedupe by `(type, subfolder, filename)` because the same MP4 can appear in both `gifs` and `videos` buckets and double the preview count.
 - Never let temp previews block history fallback. Always filter `preview_images` to non-temp before deciding whether to fetch ComfyUI output media because temp-only saved previews hide final outputs.
+- Never rely on ComfyUI `/history` fallback for restart durability. Always persist `preview_images` before run end completes (or backfill from `/history` immediately) because ComfyUI history may be unavailable after restart.
+- Never test or debug using the live CozyGen cache directory or running CozyGen instance data. Always ask the user to export/share sanitized debug data into this project first because cache/runtime data may contain sensitive content.
 - Never replace an existing configurable node when a simpler variant is requested. Always add a separate minimal node to avoid workflow regressions.
 - Never increase numeric UI precision without updating backend rounding/serialization too. Always keep them aligned because hidden truncation causes confusing value changes.
 - Never assume new CozyGen node classes appear in the web UI automatically. Always update MainPage type lists and widget/value mappings because the UI uses hardcoded class-type handling.
