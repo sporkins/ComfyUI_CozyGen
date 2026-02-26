@@ -42,6 +42,24 @@
 - Output diffs clearly with file paths.
 - Use structured thinking: <thinking> tags for complex reasoning.
 - After fix: always propose running tests / verification steps.
+- Never route history clicks directly into applying settings when inspection is requested. Always send users to a review page first because it prevents accidental loads and makes compare/copy workflows possible.
+- Never collapse history detail previews to final-only when inspection is the goal. Always show a default main preview plus selectable run/job previews because users need to inspect alternate outputs before applying settings.
+- Never emit both `temp` and `output` video previews from `CozyGenVideoPreviewOutputMulti` when final outputs exist. Always prefer `output` previews because mixed VHS temp/output lists double-count history videos.
+- Never auto-import ComfyUI-executed runs into CozyGen history by default. Always keep ComfyUI-run ingestion explicit/opt-in because backfill surprises users and creates phantom history entries after cache resets.
+- Never trust ComfyUI history media bucket counts directly. Always dedupe by `(type, subfolder, filename)` because the same MP4 can appear in both `gifs` and `videos` buckets and double the preview count.
+- Never let temp previews block history fallback. Always filter `preview_images` to non-temp before deciding whether to fetch ComfyUI output media because temp-only saved previews hide final outputs.
+- Never replace an existing configurable node when a simpler variant is requested. Always add a separate minimal node to avoid workflow regressions.
+- Never increase numeric UI precision without updating backend rounding/serialization too. Always keep them aligned because hidden truncation causes confusing value changes.
+- Never assume new CozyGen node classes appear in the web UI automatically. Always update MainPage type lists and widget/value mappings because the UI uses hardcoded class-type handling.
+- Never let polling timers close over mutable UI settings/state. Always read live values from refs or refreshed callbacks because stale closures make controls appear broken.
+- Never add a workflow node for a feature that is global UI state by nature. Always prefer backend/UI-only implementation first because it avoids execution-graph friction and user confusion.
+- Never rely on small native mobile number steppers for important controls. Always provide explicit +/- buttons because touch targets and browser UI vary too much.
+- Never auto-scroll a dropdown list in response to hover-only highlight changes. Always reserve scroll-follow behavior for keyboard/programmatic navigation because wheel scrolling under a stationary cursor causes jump loops.
+- Never put freshly-created derived arrays/objects in effect deps when the effect mutates UI state. Always depend on the true source inputs (or memoize) because render-to-render identity churn can create reset loops.
+- Never perform side effects inside React state updater callbacks. Always keep updater functions pure because React may invoke them more than once.
+- Never bolt shared media controls onto independent previews without refs. Always centralize play/pause through parent-held refs because per-element controls drift out of sync.
+- Never present selectable compare state as plain text actions when a toggle is intended. Always use a checkbox-style affordance because selection state must be immediately legible.
+- Never add a composite CozyGen selector with dropdowns without adding matching `/cozygen/get_choices` sources for each list because the UI hydrates choices before computing stable defaults.
 
 ## PROJECT-SPECIFIC (add as needed)
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getGallery } from '../api';
 import GalleryItem from '../components/GalleryItem';
 import SearchableSelect from '../components/SearchableSelect';
+import MediaComparePanel from '../components/MediaComparePanel';
 import Modal from 'react-modal'; // Using react-modal for accessibility
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 
@@ -38,6 +39,12 @@ Modal.setAppElement('#root');
 
 const isVideo = (filename) => /\.(mp4|webm)$/i.test(filename);
 const isAudio = (filename) => /\.(mp3|wav|flac)$/i.test(filename);
+const getGalleryItemKey = (item) => `${item?.subfolder || ''}::${item?.filename || ''}`;
+const getComparableMediaType = (item) => {
+    if (!item || item.type === 'directory') return null;
+    if (isAudio(item.filename)) return null;
+    return isVideo(item.filename) ? 'video' : 'image';
+};
 const FILE_TYPE_FILTER_OPTIONS = [
     { value: 'all', label: 'All Files' },
     { value: 'image', label: 'Images' },
@@ -59,6 +66,8 @@ const Gallery = () => {
     const [pageSize, setPageSize] = useState(parseInt(localStorage.getItem('galleryPageSize'), 10) || 20);
     const [fileTypeFilter, setFileTypeFilter] = useState(localStorage.getItem('galleryFileTypeFilter') || 'all');
     const [sortOrder, setSortOrder] = useState(localStorage.getItem('gallerySortOrder') || 'date_desc');
+    const [compareSelection, setCompareSelection] = useState([]);
+    const [compareNotice, setCompareNotice] = useState('');
 
     useEffect(() => {
         const fetchGallery = async () => {
@@ -88,6 +97,8 @@ const Gallery = () => {
 
     const handleSelect = (item) => {
         if (item.type === 'directory') {
+            setCompareSelection([]);
+            setCompareNotice('');
             setPath(item.subfolder);
             setPage(1);
         } else {
@@ -96,19 +107,56 @@ const Gallery = () => {
         }
     };
 
+    const clearCompare = () => {
+        setCompareSelection([]);
+        setCompareNotice('');
+    };
+
+    const toggleCompareSelection = (item) => {
+        const itemMediaType = getComparableMediaType(item);
+        if (!itemMediaType) {
+            return;
+        }
+        const itemKey = getGalleryItemKey(item);
+        const isAlreadySelected = compareSelection.some((selected) => getGalleryItemKey(selected) === itemKey);
+        if (isAlreadySelected) {
+            setCompareSelection(compareSelection.filter((selected) => getGalleryItemKey(selected) !== itemKey));
+            setCompareNotice('');
+            return;
+        }
+
+        if (compareSelection.length > 0) {
+            const existingType = getComparableMediaType(compareSelection[0]);
+            if (existingType && existingType !== itemMediaType) {
+                setCompareNotice(`Compare only supports ${existingType} to ${existingType}.`);
+                return;
+            }
+        }
+
+        if (compareSelection.length >= 2) {
+            return;
+        }
+
+        setCompareSelection([...compareSelection, item]);
+        setCompareNotice('');
+    };
+
     const handlePageSizeChange = (nextValue) => {
         const newSize = parseInt(nextValue, 10);
+        clearCompare();
         setPageSize(newSize);
         setPage(1); // Reset to first page when page size changes
         localStorage.setItem('galleryPageSize', newSize);
     };
 
     const handleFileTypeFilterChange = (nextValue) => {
+        clearCompare();
         setFileTypeFilter(nextValue);
         setPage(1);
     };
 
     const handleSortOrderChange = (nextValue) => {
+        clearCompare();
         setSortOrder(nextValue);
         setPage(1);
     };
@@ -117,6 +165,7 @@ const Gallery = () => {
         const normalizedPath = path.replace(/\\/g, '/');
         const pathSegments = normalizedPath.split('/').filter(Boolean);
         const newPath = pathSegments.slice(0, index).join('/');
+        clearCompare();
         setPath(newPath);
         setPage(1);
     };
@@ -124,6 +173,7 @@ const Gallery = () => {
     const handleFolderUp = () => {
         const normalizedPath = path.replace(/\\/g, '/');
         const pathSegments = normalizedPath.split('/').filter(Boolean);
+        clearCompare();
         if (pathSegments.length > 0) {
             const newPath = pathSegments.slice(0, -1).join('/');
             setPath(newPath);
@@ -131,6 +181,19 @@ const Gallery = () => {
             setPath(''); // Already at root, ensure path is empty
         }
         setPage(1);
+    };
+
+    const isItemSelectedForCompare = (item) => compareSelection.some(
+        (selected) => getGalleryItemKey(selected) === getGalleryItemKey(item)
+    );
+
+    const getCompareButtonDisabled = (item) => {
+        const itemType = getComparableMediaType(item);
+        if (!itemType) return true;
+        if (isItemSelectedForCompare(item)) return false;
+        if (compareSelection.length >= 2) return true;
+        if (compareSelection.length === 0) return false;
+        return getComparableMediaType(compareSelection[0]) !== itemType;
     };
 
     const handleNext = () => {
@@ -177,11 +240,12 @@ const Gallery = () => {
     };
 
     const breadcrumbs = path.split(/[\/]/).filter(Boolean); // Handle both windows and unix paths
+    const comparedItems = compareSelection.length === 2 ? compareSelection : [];
 
     return (
         <div className="p-4">
             <div className="mb-4 bg-base-200 rounded-lg p-2 flex items-center text-lg">
-                <span onClick={() => { setPath(''); setPage(1); }} className="cursor-pointer hover:text-accent transition-colors">Gallery</span>
+                <span onClick={() => { clearCompare(); setPath(''); setPage(1); }} className="cursor-pointer hover:text-accent transition-colors">Gallery</span>
                 {breadcrumbs.map((segment, index) => (
                     <React.Fragment key={index}>
                         <span className="mx-2 text-gray-500">/</span>
@@ -203,7 +267,10 @@ const Gallery = () => {
 
             <div className="flex flex-wrap justify-center items-center gap-3 mb-4">
                 <button
-                    onClick={() => setPage(page > 1 ? page - 1 : 1)}
+                    onClick={() => {
+                        clearCompare();
+                        setPage(page > 1 ? page - 1 : 1);
+                    }}
                     disabled={page <= 1}
                     className="px-4 py-2 bg-base-300 text-white rounded-md disabled:opacity-50"
                 >
@@ -213,7 +280,10 @@ const Gallery = () => {
                     Page {page} of {totalPages}
                 </span>
                 <button
-                    onClick={() => setPage(page < totalPages ? page + 1 : totalPages)}
+                    onClick={() => {
+                        clearCompare();
+                        setPage(page < totalPages ? page + 1 : totalPages);
+                    }}
                     disabled={page >= totalPages}
                     className="px-4 py-2 bg-base-300 text-white rounded-md disabled:opacity-50"
                 >
@@ -257,9 +327,43 @@ const Gallery = () => {
                 </div>
             </div>
 
+            <div className="mb-4 bg-base-200 rounded-lg p-3 flex flex-wrap items-center gap-2">
+                <span className="text-sm text-gray-400">Compare:</span>
+                <span className="text-sm text-white">{compareSelection.length}/2 selected</span>
+                {compareSelection.length > 0 && (
+                    <span className="text-xs text-gray-400">
+                        {getComparableMediaType(compareSelection[0]) === 'video' ? 'Video mode' : 'Image mode'}
+                    </span>
+                )}
+                <button
+                    type="button"
+                    onClick={clearCompare}
+                    disabled={compareSelection.length === 0}
+                    className="btn btn-xs btn-outline"
+                >
+                    Clear Compare
+                </button>
+                {compareNotice && (
+                    <span className="text-xs text-warning">{compareNotice}</span>
+                )}
+            </div>
+
+            {comparedItems.length === 2 && (
+                <div className="mb-4">
+                    <MediaComparePanel leftItem={comparedItems[0]} rightItem={comparedItems[1]} />
+                </div>
+            )}
+
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                 {items.map(item => (
-                    <GalleryItem key={item.filename} item={item} onSelect={handleSelect} />
+                    <GalleryItem
+                        key={getGalleryItemKey(item)}
+                        item={item}
+                        onSelect={handleSelect}
+                        onToggleCompare={toggleCompareSelection}
+                        isSelectedForCompare={isItemSelectedForCompare(item)}
+                        compareButtonDisabled={getCompareButtonDisabled(item)}
+                    />
                 ))}
             </div>
 

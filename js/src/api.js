@@ -144,6 +144,54 @@ export const getCozyPresets = async () => {
   return response.json();
 };
 
+export const getCozyLogs = async (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.afterId !== undefined && options.afterId !== null && options.afterId !== '') {
+    params.set('after_id', String(options.afterId));
+  }
+  if (options.limit !== undefined && options.limit !== null && options.limit !== '') {
+    params.set('limit', String(options.limit));
+  }
+  const query = params.toString();
+  const response = await fetch(`${BASE_URL}/logs${query ? `?${query}` : ''}`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch CozyGen logs');
+  }
+  return response.json();
+};
+
+export const getCozyLogsConfig = async () => {
+  const response = await fetch(`${BASE_URL}/logs/config`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch CozyGen logs config');
+  }
+  return response.json();
+};
+
+export const saveCozyLogsConfig = async (payload) => {
+  const response = await fetch(`${BASE_URL}/logs/config`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to save CozyGen logs config');
+  }
+  return response.json();
+};
+
+export const clearCozyLogs = async () => {
+  const response = await fetch(`${BASE_URL}/logs/clear`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error('Failed to clear CozyGen logs');
+  }
+  return response.json();
+};
+
 export const saveCozyPresets = async (items) => {
   const response = await fetch(`${BASE_URL}/presets`, {
     method: 'POST',
@@ -175,6 +223,23 @@ export const getViewUrl = (filename, subfolder = '', type = 'output', options = 
   return `${baseUrl}/view?${params.toString()}`;
 };
 
+export const getCozyMediaUrl = (filename, subfolder = '', type = 'output', options = {}) => {
+  const baseUrl = window.location.protocol + '//' + window.location.host;
+  const params = new URLSearchParams({
+    filename,
+    subfolder,
+    type,
+  });
+  if (options && typeof options === 'object') {
+    Object.entries(options).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+  }
+  return `${baseUrl}/cozygen/media?${params.toString()}`;
+};
+
 export const getThumbUrl = (filename, subfolder = '', type = 'output', options = {}) => {
   const baseUrl = window.location.protocol + '//' + window.location.host;
   const params = new URLSearchParams({
@@ -190,6 +255,34 @@ export const getThumbUrl = (filename, subfolder = '', type = 'output', options =
     });
   }
   return `${baseUrl}/cozygen/thumb?${params.toString()}`;
+};
+
+export const parseMediaRefFromUrl = (url) => {
+  if (!url || typeof url !== 'string') return null;
+  try {
+    const parsed = new URL(url, window.location.protocol + '//' + window.location.host);
+    const pathname = parsed.pathname || '';
+    const supportedPath = pathname === '/view'
+      || pathname === '/cozygen/media'
+      || pathname === '/cozygen/thumb';
+    if (!supportedPath) return null;
+
+    const filename = parsed.searchParams.get('filename') || '';
+    if (!filename) return null;
+    return {
+      filename,
+      subfolder: parsed.searchParams.get('subfolder') || '',
+      type: parsed.searchParams.get('type') || 'output',
+    };
+  } catch {
+    return null;
+  }
+};
+
+export const getCozyMediaUrlFromPreviewUrl = (url) => {
+  const mediaRef = parseMediaRefFromUrl(url);
+  if (!mediaRef) return url;
+  return getCozyMediaUrl(mediaRef.filename, mediaRef.subfolder, mediaRef.type);
 };
 
 export const getObjectInfo = async () => {

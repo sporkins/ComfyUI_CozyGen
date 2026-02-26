@@ -6,10 +6,17 @@ const isVideo = (filename) => /\.(mp4|webm)$/i.test(filename);
 const isGif = (filename) => /\.(gif)$/i.test(filename);
 const isAudio = (filename) => /\.(mp3|wav|flac)$/i.test(filename);
 
-const GalleryItem = ({ item, onSelect }) => {
+const GalleryItem = ({
+    item,
+    onSelect,
+    onToggleCompare,
+    isSelectedForCompare = false,
+    compareButtonDisabled = false,
+}) => {
     const isDirectory = item.type === 'directory';
     const fileUrl = isDirectory ? '' : getViewUrl(item.filename, item.subfolder, 'output');
     const thumbUrl = isDirectory ? '' : getThumbUrl(item.filename, item.subfolder, 'output', { w: 384, q: 45, fmt: 'webp' });
+    const isComparableMedia = !isDirectory && !isAudio(item.filename);
 
     const renderContent = () => {
         if (isDirectory) {
@@ -50,12 +57,33 @@ const GalleryItem = ({ item, onSelect }) => {
 
     return (
         <div 
-            className="bg-base-200 rounded-lg shadow-lg overflow-hidden cursor-pointer group transform hover:-translate-y-1 transition-all duration-300"
+            className={`bg-base-200 rounded-lg shadow-lg overflow-hidden cursor-pointer group transform hover:-translate-y-1 transition-all duration-300 ${isSelectedForCompare ? 'ring-2 ring-accent' : ''}`}
             onClick={() => onSelect(item)}
         >
             <div className="relative w-full h-48">
                 {renderContent()}
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity" />
+                {isComparableMedia && typeof onToggleCompare === 'function' && (
+                    <label
+                        className={`absolute top-2 right-2 z-10 flex items-center gap-2 rounded-full px-2 py-1 text-xs transition-colors shadow ${
+                            isSelectedForCompare
+                                ? 'bg-base-100/95 text-white ring-1 ring-accent'
+                                : 'bg-black/75 text-white hover:bg-black/90'
+                        } ${compareButtonDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                        onClick={(event) => event.stopPropagation()}
+                        title={isSelectedForCompare ? 'Remove from compare' : 'Add to compare'}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={isSelectedForCompare}
+                            disabled={compareButtonDisabled}
+                            onChange={() => onToggleCompare(item)}
+                            className="checkbox checkbox-xs checkbox-accent"
+                            aria-label={`${isSelectedForCompare ? 'Remove' : 'Add'} ${item.filename} ${isSelectedForCompare ? 'from' : 'to'} compare`}
+                        />
+                        <span className="leading-none">Compare</span>
+                    </label>
+                )}
             </div>
             <p className="p-2 text-sm text-white truncate">{item.filename}</p>
         </div>

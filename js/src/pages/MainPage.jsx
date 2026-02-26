@@ -127,20 +127,29 @@ const WANVIDEO_QUANTIZATIONS = [
   "fp8_e5m2_scaled_fast",
 ];
 const WANVIDEO_LOAD_DEVICES = ["main_device", "offload_device"];
+const WANVIDEO_MODEL_NODE_TYPES = ['CozyGenWanVideoModelSelector', 'CozyGenWanVideoWrapperModelSelector'];
+const GGUFLOADERKJ_DEQUANT_DTYPES = ["default", "target", "float32", "float16", "bfloat16"];
+const GGUFLOADERKJ_PATCH_DTYPES = ["default", "target", "float32", "float16", "bfloat16"];
+const GGUFLOADERKJ_ATTENTION_OVERRIDES = ["none", "sdpa", "sageattn", "xformers", "flashattn"];
+const GGUFLOADERKJ_MODEL_NODE_TYPES = ['CozyGenGGUFLoaderKJModelSelector'];
 const HISTORY_SELECTION_KEY = 'historySelection';
 const PRESET_STORAGE_KEY = 'cozygenWorkflowPresetsV1';
 const COZYGEN_INPUT_TYPES = [
     'CozyGenDynamicInput', 
     'CozyGenImageInput', 
     'CozyGenFloatInput', 
+    'CozyGenSimpleFloatInput',
     'CozyGenIntInput', 
+    'CozyGenSimpleIntInput',
     'CozyGenSeedInput',
     'CozyGenRandomNoiseInput',
     'CozyGenStringInput',
     'CozyGenChoiceInput',
     'CozyGenLoraInput',
     'CozyGenLoraInputMulti',
+    'CozyGenWanVideoWrapperModelSelector',
     'CozyGenWanVideoModelSelector',
+    'CozyGenGGUFLoaderKJModelSelector',
     'CozyGenBoolInput'
 ];
 const getCozyInputCollapseKey = (input) => String(input?.id ?? input?.inputs?.param_name ?? '');
@@ -393,9 +402,10 @@ function App() {
       const isDynamicDropdown = input.class_type === 'CozyGenDynamicInput' && input.inputs['param_type'] === 'DROPDOWN';
       const isChoiceNode = input.class_type === 'CozyGenChoiceInput';
       const isLoraNode = ["CozyGenLoraInput", "CozyGenLoraInputMulti"].includes(input.class_type);
-      const isWanVideoModelNode = input.class_type === 'CozyGenWanVideoModelSelector';
+      const isWanVideoModelNode = WANVIDEO_MODEL_NODE_TYPES.includes(input.class_type);
+      const isGGUFLoaderKJModelNode = GGUFLOADERKJ_MODEL_NODE_TYPES.includes(input.class_type);
 
-      if (isDynamicDropdown || isChoiceNode || isLoraNode || isWanVideoModelNode) {
+      if (isDynamicDropdown || isChoiceNode || isLoraNode || isWanVideoModelNode || isGGUFLoaderKJModelNode) {
         const param_name = input.inputs['param_name'];
         let choiceType = input.inputs['choice_type'] || (input.properties && input.properties['choice_type']);
                 
@@ -421,6 +431,29 @@ function App() {
               basePrecisions: WANVIDEO_BASE_PRECISIONS,
               quantizations: WANVIDEO_QUANTIZATIONS,
               loadDevices: WANVIDEO_LOAD_DEVICES,
+            };
+          }
+        } else if (isGGUFLoaderKJModelNode) {
+          try {
+            const [modelChoicesData, extraModelChoicesData] = await Promise.all([
+              getChoices("ggufloaderkj_models"),
+              getChoices("ggufloaderkj_extra_models"),
+            ]);
+            input.inputs.choices = {
+              modelNames: modelChoicesData.choices || [],
+              extraModelNames: extraModelChoicesData.choices || [],
+              dequantDtypes: GGUFLOADERKJ_DEQUANT_DTYPES,
+              patchDtypes: GGUFLOADERKJ_PATCH_DTYPES,
+              attentionOverrides: GGUFLOADERKJ_ATTENTION_OVERRIDES,
+            };
+          } catch (error) {
+            console.error(`Error fetching GGUFLoaderKJ model choices:`, error);
+            input.inputs.choices = {
+              modelNames: [],
+              extraModelNames: ['none'],
+              dequantDtypes: GGUFLOADERKJ_DEQUANT_DTYPES,
+              patchDtypes: GGUFLOADERKJ_PATCH_DTYPES,
+              attentionOverrides: GGUFLOADERKJ_ATTENTION_OVERRIDES,
             };
           }
         } else if (choiceType) {
@@ -459,6 +492,13 @@ function App() {
         } else if (input.class_type === 'CozyGenFloatInput') {
           defaultValue = parseFloat(defaultValue);
         }
+      } else if (['CozyGenSimpleFloatInput', 'CozyGenSimpleIntInput'].includes(input.class_type)) {
+        defaultValue = input.inputs['value'];
+        if (input.class_type === 'CozyGenSimpleIntInput') {
+          defaultValue = parseInt(defaultValue, 10);
+        } else if (input.class_type === 'CozyGenSimpleFloatInput') {
+          defaultValue = parseFloat(defaultValue);
+        }
       } else if (input.class_type === 'CozyGenSeedInput') {
         defaultValue = parseInt(input.inputs.seed, 10);
         if (Number.isNaN(defaultValue)) {
@@ -491,12 +531,22 @@ function App() {
         defaultValue.num_loras = Number.isFinite(configuredCount)
           ? Math.max(1, Math.min(5, configuredCount))
           : 5;
-      } else if(input.class_type === "CozyGenWanVideoModelSelector") {
+      } else if(WANVIDEO_MODEL_NODE_TYPES.includes(input.class_type)) {
         defaultValue = {
           model_name: input.inputs.model_name || input.inputs.choices?.modelNames?.[0] || 'none',
           base_precision: input.inputs.base_precision || WANVIDEO_BASE_PRECISIONS[0],
           quantization: input.inputs.quantization || WANVIDEO_QUANTIZATIONS[0],
           load_device: input.inputs.load_device || WANVIDEO_LOAD_DEVICES[1],
+        };
+      } else if(GGUFLOADERKJ_MODEL_NODE_TYPES.includes(input.class_type)) {
+        defaultValue = {
+          model_name: input.inputs.model_name || input.inputs.choices?.modelNames?.[0] || 'none',
+          extra_model_name: input.inputs.extra_model_name || input.inputs.choices?.extraModelNames?.[0] || 'none',
+          dequant_dtype: input.inputs.dequant_dtype || GGUFLOADERKJ_DEQUANT_DTYPES[0],
+          patch_dtype: input.inputs.patch_dtype || GGUFLOADERKJ_PATCH_DTYPES[0],
+          patch_on_device: Boolean(input.inputs.patch_on_device),
+          enable_fp16_accumulation: Boolean(input.inputs.enable_fp16_accumulation),
+          attention_override: input.inputs.attention_override || GGUFLOADERKJ_ATTENTION_OVERRIDES[0],
         };
       } else if (input.class_type === 'CozyGenImageInput') {
         defaultValue = input.inputs.image;
@@ -1216,6 +1266,8 @@ function App() {
                     nodeToUpdate.inputs.noise_seed = Number.isNaN(parsedSeed) ? 0 : parsedSeed;
                 } else if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenStringInput', 'CozyGenDynamicInput'].includes(dynamicNode.class_type)) {
                     nodeToUpdate.inputs.default_value = valueToInject;
+                } else if (['CozyGenSimpleFloatInput', 'CozyGenSimpleIntInput'].includes(dynamicNode.class_type)) {
+                    nodeToUpdate.inputs.value = valueToInject;
                 } else if (dynamicNode.class_type === 'CozyGenChoiceInput') {
                     nodeToUpdate.inputs.value = valueToInject;
                 } else if(dynamicNode.class_type === 'CozyGenLoraInput') {
@@ -1251,12 +1303,21 @@ function App() {
                         const inferredNumLoras = highestActiveIndex >= 0 ? (highestActiveIndex + 1) : fallbackNumLoras;
                         nodeToUpdate.inputs.num_loras = Math.max(1, Math.min(5, inferredNumLoras));
                     }
-                } else if(dynamicNode.class_type === 'CozyGenWanVideoModelSelector') {
+                } else if(WANVIDEO_MODEL_NODE_TYPES.includes(dynamicNode.class_type)) {
                     const modelValue = valueToInject || {};
                     nodeToUpdate.inputs.model_name = modelValue.model_name || 'none';
                     nodeToUpdate.inputs.base_precision = modelValue.base_precision || 'bf16';
                     nodeToUpdate.inputs.quantization = modelValue.quantization || 'disabled';
                     nodeToUpdate.inputs.load_device = modelValue.load_device || 'offload_device';
+                } else if(GGUFLOADERKJ_MODEL_NODE_TYPES.includes(dynamicNode.class_type)) {
+                    const modelValue = valueToInject || {};
+                    nodeToUpdate.inputs.model_name = modelValue.model_name || 'none';
+                    nodeToUpdate.inputs.extra_model_name = modelValue.extra_model_name || 'none';
+                    nodeToUpdate.inputs.dequant_dtype = modelValue.dequant_dtype || 'default';
+                    nodeToUpdate.inputs.patch_dtype = modelValue.patch_dtype || 'default';
+                    nodeToUpdate.inputs.patch_on_device = Boolean(modelValue.patch_on_device);
+                    nodeToUpdate.inputs.enable_fp16_accumulation = Boolean(modelValue.enable_fp16_accumulation);
+                    nodeToUpdate.inputs.attention_override = modelValue.attention_override || 'none';
                 } else if(dynamicNode.class_type === 'CozyGenBoolInput') {
                     nodeToUpdate.inputs.value = valueToInject;
                 }
@@ -1342,8 +1403,14 @@ function App() {
   const controlInputs = dynamicInputs
     .filter(input => input.class_type !== 'CozyGenImageInput')
     .map(input => {
-      if (['CozyGenFloatInput', 'CozyGenIntInput', 'CozyGenSeedInput', 'CozyGenRandomNoiseInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', 'CozyGenWanVideoModelSelector', 'CozyGenBoolInput'].includes(input.class_type)) {
+      if (['CozyGenFloatInput', 'CozyGenSimpleFloatInput', 'CozyGenIntInput', 'CozyGenSimpleIntInput', 'CozyGenSeedInput', 'CozyGenRandomNoiseInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', ...WANVIDEO_MODEL_NODE_TYPES, ...GGUFLOADERKJ_MODEL_NODE_TYPES, 'CozyGenBoolInput'].includes(input.class_type)) {
         let param_type = input.class_type.replace('CozyGen', '').replace('Input', '').toUpperCase();
+        if (param_type === 'SIMPLEFLOAT') {
+          param_type = 'FLOAT';
+        }
+        if (param_type === 'SIMPLEINT') {
+          param_type = 'INT';
+        }
         if (param_type === 'CHOICE') {
           param_type = 'DROPDOWN';
         }
@@ -1353,8 +1420,11 @@ function App() {
         if (param_type === 'LORAMULTI') {
           param_type = 'LORA_MULTI';
         }
-        if (input.class_type === 'CozyGenWanVideoModelSelector') {
+        if (WANVIDEO_MODEL_NODE_TYPES.includes(input.class_type)) {
           param_type = 'WANVIDEO_MODEL';
+        }
+        if (GGUFLOADERKJ_MODEL_NODE_TYPES.includes(input.class_type)) {
+          param_type = 'GGUFLOADERKJ_MODEL';
         }
         return {
           ...input,

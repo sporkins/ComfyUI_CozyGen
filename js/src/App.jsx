@@ -4,7 +4,9 @@ import Layout from './components/Layout';
 import MainPage from './pages/MainPage';
 import Gallery from './pages/Gallery';
 import HistoryTab from './components/HistoryTab';
+import HistoryDetail from './pages/HistoryDetail';
 import QueueTab from './components/QueueTab';
+import LogsTab from './components/LogsTab';
 
 function App() {
     return (
@@ -14,7 +16,9 @@ function App() {
                     <Route index element={<MainPage />} />
                     <Route path="gallery" element={<Gallery />} />
                     <Route path="history" element={<HistoryTab />} />
+                    <Route path="history/:historyId" element={<HistoryDetail />} />
                     <Route path="queue" element={<QueueTab />} />
+                    <Route path="logs" element={<LogsTab />} />
                 </Route>
             </Routes>
         </HashRouter>

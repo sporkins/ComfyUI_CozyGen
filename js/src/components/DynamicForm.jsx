@@ -6,6 +6,7 @@ import DropdownInput from './inputs/DropdownInput';
 import LoraInput from './inputs/LoraInput';
 import LoraMultiInput from './inputs/LoraMultiInput';
 import WanVideoModelInput from './inputs/WanVideoModelInput';
+import GGUFLoaderKJModelInput from './inputs/GGUFLoaderKJModelInput';
 import SeedInput from './inputs/SeedInput';
 
 const getInputCollapseKey = (input) => String(input?.id ?? input?.inputs?.param_name ?? '');
@@ -115,6 +116,21 @@ const renderInput = (
                     choices={inputs['choices']}
                 />;
             break;
+        case 'GGUFLOADERKJ_MODEL':
+            inputComponent = <GGUFLoaderKJModelInput
+                    value={value ?? {
+                        model_name: inputs['model_name'],
+                        extra_model_name: inputs['extra_model_name'],
+                        dequant_dtype: inputs['dequant_dtype'],
+                        patch_dtype: inputs['patch_dtype'],
+                        patch_on_device: inputs['patch_on_device'],
+                        enable_fp16_accumulation: inputs['enable_fp16_accumulation'],
+                        attention_override: inputs['attention_override'],
+                    }}
+                    onChange={(val) => onFormChange(param_name, val)}
+                    choices={inputs['choices']}
+                />;
+            break;
         default:
             inputComponent = <p>Unsupported input type: {param_type}</p>;
     }
@@ -185,7 +201,7 @@ const DynamicForm = ({
       <h2 className="text-lg font-semibold text-white mb-2">Controls</h2>
       <div className="grid grid-cols-1 xs:grid-cols-2 gap-x-4 gap-y-4">
         {inputs.map(input => (
-            <div key={input.id} className={(input.inputs['Multiline'] || ['LORA', 'LORA_MULTI', 'WANVIDEO_MODEL'].includes(input.inputs.param_type)) ? 'xs:col-span-2' : ''}>
+            <div key={input.id} className={(input.inputs['Multiline'] || ['LORA', 'LORA_MULTI', 'WANVIDEO_MODEL', 'GGUFLOADERKJ_MODEL'].includes(input.inputs.param_type)) ? 'xs:col-span-2' : ''}>
                 {renderInput(input, formData, onFormChange, randomizeState, onRandomizeToggle, bypassedState, onBypassToggle, collapsedInputs, onToggleCollapse)}
             </div>
         ))}

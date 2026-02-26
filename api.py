@@ -8,11 +8,20 @@ from PIL import Image, ImageOps
 import server # Import server for node_info
 import uuid # For generating unique filenames
 import re
+from .log_capture import (
+    ensure_log_capture_started,
+    get_log_entries,
+    get_log_buffer_config,
+    set_log_buffer_config,
+    clear_log_buffer,
+)
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_WORKFLOWS_DIR = os.path.join(MODULE_DIR, ".workflows")
 DEFAULT_CACHE_DIR = os.path.join(MODULE_DIR, ".cache")
 CONFIG_FILENAME = "config.json"
+
+ensure_log_capture_started()
 
 def get_config() -> dict:
     config_path = os.path.join(MODULE_DIR, CONFIG_FILENAME)
@@ -360,6 +369,29 @@ async def get_thumbnail(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"error": f"Thumbnail generation failed: {e}"}, status=500)
 
+async def get_media_file(request: web.Request) -> web.Response:
+    filename = request.rel_url.query.get("filename", "")
+    subfolder = request.rel_url.query.get("subfolder", "")
+    file_type = request.rel_url.query.get("type", "output")
+
+    if not filename:
+        return web.json_response({"error": "Missing 'filename' query parameter"}, status=400)
+
+    base_dir = get_base_dir_for_type(file_type)
+    if not base_dir:
+        return web.json_response({"error": "Invalid media type"}, status=400)
+
+    file_path = normalize_media_path(base_dir, subfolder, filename)
+    if not file_path:
+        return web.json_response({"error": "Unauthorized path"}, status=403)
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+        return web.json_response({"error": "File not found"}, status=404)
+
+    return web.FileResponse(
+        file_path,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
 async def get_history_list(request: web.Request) -> web.Response:
     items = list_history_entries()
     return web.json_response({"items": items})
@@ -455,6 +487,60 @@ async def save_presets(request: web.Request) -> web.Response:
     write_presets(sanitized_items)
     return web.json_response({"status": "ok", "items": sanitized_items})
 
+
+async def get_logs(request: web.Request) -> web.Response:
+    after_id_param = request.rel_url.query.get("after_id")
+    limit_param = request.rel_url.query.get("limit")
+
+    try:
+        after_id = int(after_id_param) if after_id_param not in (None, "") else None
+        limit = int(limit_param) if limit_param not in (None, "") else None
+    except ValueError:
+        return web.json_response({"error": "Invalid logs query parameters"}, status=400)
+
+    try:
+        payload = get_log_entries(after_id=after_id, limit=limit)
+    except Exception as e:
+        return web.json_response({"error": f"Failed to read logs: {e}"}, status=500)
+
+    return web.json_response(payload)
+
+
+async def get_logs_config(request: web.Request) -> web.Response:
+    return web.json_response(get_log_buffer_config())
+
+
+async def save_logs_config(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    if not isinstance(payload, dict):
+        return web.json_response({"error": "Invalid logs config payload"}, status=400)
+
+    infinite = payload.get("infinite")
+    max_buffer = payload.get("max_buffer")
+
+    if infinite is not None and not isinstance(infinite, bool):
+        return web.json_response({"error": "Invalid 'infinite' value"}, status=400)
+
+    if max_buffer is not None:
+        try:
+            max_buffer = int(max_buffer)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "Invalid 'max_buffer' value"}, status=400)
+        if max_buffer < 1:
+            return web.json_response({"error": "'max_buffer' must be >= 1"}, status=400)
+
+    config = set_log_buffer_config(max_buffer=max_buffer, infinite=infinite)
+    return web.json_response({"status": "ok", **config})
+
+
+async def clear_logs(request: web.Request) -> web.Response:
+    clear_log_buffer()
+    return web.json_response({"status": "ok", **get_log_buffer_config()})
+
 async def upload_workflow_file(request: web.Request) -> web.Response:
     filename = request.match_info.get('filename', 'workflow.json')
     workflows_dir = get_workflows_dir()
@@ -535,13 +621,36 @@ async def get_choices(request: web.Request) -> web.Response:
     elif resolved_choice_type == "sampler":
         choices = comfy.samplers.KSampler.SAMPLERS
     elif resolved_choice_type == "wanvideo_models":
-        unet_models = folder_paths.get_filename_list("unet_gguf")
-        diffusion_models = folder_paths.get_filename_list("diffusion_models")
+        try:
+            unet_models = folder_paths.get_filename_list("unet_gguf")
+        except KeyError:
+            unet_models = []
+        try:
+            diffusion_models = folder_paths.get_filename_list("diffusion_models")
+        except KeyError:
+            diffusion_models = []
         combined = [*unet_models, *diffusion_models]
         if combined:
             choices = combined
         else:
             choices = ["none"]
+    elif resolved_choice_type == "ggufloaderkj_models":
+        try:
+            gguf_models = list(folder_paths.get_filename_list("unet_gguf"))
+        except KeyError:
+            gguf_models = []
+        choices = gguf_models or ["none"]
+    elif resolved_choice_type == "ggufloaderkj_extra_models":
+        try:
+            gguf_models = list(folder_paths.get_filename_list("unet_gguf"))
+        except KeyError:
+            gguf_models = []
+        try:
+            text_encoder_models = list(folder_paths.get_filename_list("text_encoders"))
+        except KeyError:
+            text_encoder_models = []
+        connector_models = [m for m in text_encoder_models if "connector" in str(m).lower()]
+        choices = [*gguf_models, *connector_models, "none"]
     elif resolved_choice_type in valid_model_types:
         choices = folder_paths.get_filename_list(resolved_choice_type)
     else:
@@ -552,7 +661,12 @@ async def get_choices(request: web.Request) -> web.Response:
 
 routes = [
     web.get('/cozygen/hello', get_hello),
+    web.get('/cozygen/logs', get_logs),
+    web.get('/cozygen/logs/config', get_logs_config),
+    web.post('/cozygen/logs/config', save_logs_config),
+    web.post('/cozygen/logs/clear', clear_logs),
     web.get('/cozygen/gallery', get_gallery_files),
+    web.get('/cozygen/media', get_media_file),
     web.get('/cozygen/thumb', get_thumbnail),
     web.get('/cozygen/history', get_history_list),
     web.get('/cozygen/history/{history_id}', get_history_item),

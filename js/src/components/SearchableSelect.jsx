@@ -136,6 +136,7 @@ const SearchableSelect = ({
   const searchInputRef = useRef(null);
   const listContainerRef = useRef(null);
   const optionButtonRefs = useRef([]);
+  const highlightSourceRef = useRef('programmatic');
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
@@ -151,6 +152,11 @@ const SearchableSelect = ({
   const filteredOptions = normalizedOptions.filter((option) =>
     normalizedSearch ? matchesSearchQuery(option.searchText, searchTerm) : true
   );
+
+  const setHighlightedIndexWithSource = (index, source = 'programmatic') => {
+    highlightSourceRef.current = source;
+    setHighlightedIndex(index);
+  };
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -183,7 +189,7 @@ const SearchableSelect = ({
 
   useEffect(() => {
     if (!isOpen) {
-      setHighlightedIndex(-1);
+      setHighlightedIndexWithSource(-1, 'programmatic');
       setMenuPlacement('bottom');
       setMenuListMaxHeight(null);
       return;
@@ -191,12 +197,12 @@ const SearchableSelect = ({
 
     const selectedIndex = filteredOptions.findIndex((option) => valuesMatch(option.value, value));
     if (selectedIndex >= 0 && !filteredOptions[selectedIndex]?.disabled) {
-      setHighlightedIndex(selectedIndex);
+      setHighlightedIndexWithSource(selectedIndex, 'programmatic');
       return;
     }
 
-    setHighlightedIndex(getFirstEnabledIndex(filteredOptions));
-  }, [filteredOptions, isOpen, value]);
+    setHighlightedIndexWithSource(getFirstEnabledIndex(filteredOptions), 'programmatic');
+  }, [isOpen, searchTerm, value, options]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -270,6 +276,7 @@ const SearchableSelect = ({
 
   useEffect(() => {
     if (!isOpen || highlightedIndex < 0) return;
+    if (highlightSourceRef.current === 'pointer') return;
 
     const optionButton = optionButtonRefs.current[highlightedIndex];
     const listContainer = listContainerRef.current;
@@ -331,7 +338,7 @@ const SearchableSelect = ({
             : filteredOptions.length - 1
           : (nextIndex + direction + filteredOptions.length) % filteredOptions.length;
       if (!filteredOptions[nextIndex]?.disabled) {
-        setHighlightedIndex(nextIndex);
+        setHighlightedIndexWithSource(nextIndex, 'keyboard');
         return;
       }
     }
@@ -479,7 +486,7 @@ const SearchableSelect = ({
                                 ? 'bg-base-300 text-white'
                                 : 'hover:bg-base-300 text-gray-100'
                         }`.trim()}
-                        onMouseEnter={() => !option.disabled && setHighlightedIndex(index)}
+                        onMouseEnter={() => !option.disabled && setHighlightedIndexWithSource(index, 'pointer')}
                         onClick={() => selectOption(option)}
                       >
                         <span className="block whitespace-normal break-words leading-snug">

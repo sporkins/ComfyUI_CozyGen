@@ -588,6 +588,21 @@ class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
             )
             return {"ui": {"videos": []}}
 
+        has_output_payloads = any(str(payload.get("type", "output")) == "output" for payload in payloads)
+        if has_output_payloads:
+            original_count = len(payloads)
+            payloads = [
+                payload
+                for payload in payloads
+                if str(payload.get("type", "output")) != "temp"
+            ]
+            dropped_count = original_count - len(payloads)
+            if dropped_count > 0:
+                print(
+                    "CozyGen: CozyGenVideoPreviewOutputMulti dropped "
+                    f"{dropped_count} temp preview video(s) because output videos were also present."
+                )
+
         preview_name = str(param_name).strip() if param_name is not None else ""
         if not preview_name:
             preview_name = "Video Preview"
@@ -679,10 +694,10 @@ class CozyGenFloatInput:
             "required": {
                 "param_name": (IO.STRING, {"default": "Float Parameter"}),
                 "priority": (IO.INT, {"default": 10}),
-                "default_value": (IO.FLOAT, {"default": 1.0, "step": 0.01, "round": 0.01}),
-                "min_value": (IO.FLOAT, {"default": 0.0, "step": 0.01, "round": 0.01}),
-                "max_value": (IO.FLOAT, {"default": 1024.0, "step": 0.01, "round": 0.01}),
-                "step": (IO.FLOAT, {"default": 0.01, "step": 0.01, "round": 0.01}),
+                "default_value": (IO.FLOAT, {"default": 1.0, "step": 0.0001, "round": 0.0001}),
+                "min_value": (IO.FLOAT, {"default": 0.0, "step": 0.0001, "round": 0.0001}),
+                "max_value": (IO.FLOAT, {"default": 1024.0, "step": 0.0001, "round": 0.0001}),
+                "step": (IO.FLOAT, {"default": 0.01, "step": 0.0001, "round": 0.0001}),
                 "add_randomize_toggle": (IO.BOOLEAN, {"default": False}),
             }
         }
@@ -691,7 +706,25 @@ class CozyGenFloatInput:
     FUNCTION = "get_value"
     CATEGORY = "CozyGen/Static"
     def get_value(self, param_name, priority, default_value, min_value, max_value, step, add_randomize_toggle):
-        return (round(float(default_value), 2),)
+        return (round(float(default_value), 4),)
+
+class CozyGenSimpleFloatInput:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "Float Parameter"}),
+                "priority": (IO.INT, {"default": 10}),
+                "value": (IO.FLOAT, {"default": 1.0, "step": 0.0001, "round": 0.0001}),
+            }
+        }
+
+    RETURN_TYPES = (IO.FLOAT,)
+    FUNCTION = "get_value"
+    CATEGORY = "CozyGen/Static"
+
+    def get_value(self, param_name, priority, value):
+        return (round(float(value), 4),)
 
 class CozyGenIntInput:
     @classmethod
@@ -713,6 +746,24 @@ class CozyGenIntInput:
     CATEGORY = "CozyGen/Static"
     def get_value(self, param_name, priority, default_value, min_value, max_value, step, add_randomize_toggle):
         return (default_value,)
+
+class CozyGenSimpleIntInput:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "Int Parameter"}),
+                "priority": (IO.INT, {"default": 10}),
+                "value": (IO.INT, {"default": 1, "min": -9999999999, "max": 9999999999, "step": 1}),
+            }
+        }
+
+    RETURN_TYPES = (IO.INT,)
+    FUNCTION = "get_value"
+    CATEGORY = "CozyGen/Static"
+
+    def get_value(self, param_name, priority, value):
+        return (value,)
 
 class CozyGenSeedInput:
     @classmethod
@@ -939,13 +990,19 @@ class CozyGenLoraInputMulti:
 
         return (lora_stack,)
 
-class CozyGenWanVideoModelSelector:
-    _NODE_CLASS_NAME = "CozyGenWanVideoModelSelector"
+class CozyGenWanVideoWrapperModelSelector:
+    _NODE_CLASS_NAME = "CozyGenWanVideoWrapperModelSelector"
 
     @classmethod
     def get_model_choices(cls):
-        unet_models = folder_paths.get_filename_list("unet_gguf")
-        diffusion_models = folder_paths.get_filename_list("diffusion_models")
+        try:
+            unet_models = folder_paths.get_filename_list("unet_gguf")
+        except KeyError:
+            unet_models = []
+        try:
+            diffusion_models = folder_paths.get_filename_list("diffusion_models")
+        except KeyError:
+            diffusion_models = []
         combined = [*unet_models, *diffusion_models]
         if not combined:
             return ["none"]
@@ -953,10 +1010,10 @@ class CozyGenWanVideoModelSelector:
 
     @classmethod
     def INPUT_TYPES(cls):
-        model_choices = CozyGenWanVideoModelSelector.get_model_choices()
+        model_choices = cls.get_model_choices()
         return {
             "required": {
-                "param_name": (IO.STRING, {"default": "WanVideo Model Selector"}),
+                "param_name": (IO.STRING, {"default": "WanVideoWrapper Model Selector"}),
                 "priority": (IO.INT, {"default": 10}),
                 "model_name": (model_choices, {
                     "default": model_choices[0] if model_choices else "none",
@@ -991,12 +1048,139 @@ class CozyGenWanVideoModelSelector:
     RETURN_NAMES = ("model_name", "base_precision", "quantization", "load_device")
     FUNCTION = "get_value"
     CATEGORY = "CozyGen"
-    DESCRIPTION = "Select WanVideo model params — outputs connect directly to WanVideoModelLoader inputs."
+    DESCRIPTION = "Select WanVideoWrapper model params — outputs connect directly to WanVideoModelLoader inputs."
 
     def get_value(self, param_name, priority, model_name, base_precision, quantization, load_device):
-        model_choices = CozyGenWanVideoModelSelector.get_model_choices()
+        model_choices = self.get_model_choices()
         final_model = model_name if model_name in model_choices else "none"
         return (str(final_model), str(base_precision), str(quantization), str(load_device))
+
+
+class CozyGenWanVideoModelSelector(CozyGenWanVideoWrapperModelSelector):
+    _NODE_CLASS_NAME = "CozyGenWanVideoModelSelector"
+    DESCRIPTION = "Legacy alias for WanVideoWrapper model selector."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        input_types = super().INPUT_TYPES()
+        input_types["required"]["param_name"] = (IO.STRING, {"default": "WanVideo Model Selector"})
+        return input_types
+
+
+class CozyGenGGUFLoaderKJModelSelector:
+    _NODE_CLASS_NAME = "CozyGenGGUFLoaderKJModelSelector"
+
+    DEQUANT_DTYPE_CHOICES = ["default", "target", "float32", "float16", "bfloat16"]
+    PATCH_DTYPE_CHOICES = ["default", "target", "float32", "float16", "bfloat16"]
+    ATTENTION_OVERRIDE_CHOICES = ["none", "sdpa", "sageattn", "xformers", "flashattn"]
+
+    @classmethod
+    def get_model_choices(cls):
+        try:
+            models = list(folder_paths.get_filename_list("unet_gguf"))
+        except KeyError:
+            models = []
+        return models or ["none"]
+
+    @classmethod
+    def get_extra_model_choices(cls):
+        try:
+            gguf_models = list(folder_paths.get_filename_list("unet_gguf"))
+        except KeyError:
+            gguf_models = []
+        try:
+            text_encoder_models = list(folder_paths.get_filename_list("text_encoders"))
+        except KeyError:
+            text_encoder_models = []
+        connector_models = [m for m in text_encoder_models if "connector" in str(m).lower()]
+        combined = [*gguf_models, *connector_models, "none"]
+        unique = []
+        seen = set()
+        for item in combined:
+            value = str(item)
+            if value in seen:
+                continue
+            seen.add(value)
+            unique.append(value)
+        return unique or ["none"]
+
+    @staticmethod
+    def _coerce_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() == "true"
+        return bool(value)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        model_choices = cls.get_model_choices()
+        extra_model_choices = cls.get_extra_model_choices()
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "GGUFLoaderKJ Model Selector"}),
+                "priority": (IO.INT, {"default": 10}),
+                "model_name": (model_choices, {
+                    "default": model_choices[0] if model_choices else "none",
+                    "tooltip": "GGUF model from unet_gguf (for GGUFLoaderKJ model_name).",
+                }),
+                "extra_model_name": (extra_model_choices, {
+                    "default": "none",
+                    "tooltip": "Optional extra GGUF/connector model (for GGUFLoaderKJ extra_model_name).",
+                }),
+                "dequant_dtype": (cls.DEQUANT_DTYPE_CHOICES, {"default": "default"}),
+                "patch_dtype": (cls.PATCH_DTYPE_CHOICES, {"default": "default"}),
+                "patch_on_device": (IO.BOOLEAN, {"default": False}),
+                "enable_fp16_accumulation": (IO.BOOLEAN, {"default": False}),
+                "attention_override": (cls.ATTENTION_OVERRIDE_CHOICES, {"default": "none"}),
+            },
+        }
+
+    RETURN_TYPES = (IO.ANY, IO.ANY, IO.ANY, IO.ANY, IO.BOOLEAN, IO.BOOLEAN, IO.ANY)
+    RETURN_NAMES = (
+        "model_name",
+        "extra_model_name",
+        "dequant_dtype",
+        "patch_dtype",
+        "patch_on_device",
+        "enable_fp16_accumulation",
+        "attention_override",
+    )
+    FUNCTION = "get_value"
+    CATEGORY = "CozyGen"
+    DESCRIPTION = "Select GGUFLoaderKJ params — outputs connect directly to GGUFLoaderKJ inputs."
+
+    def get_value(
+        self,
+        param_name,
+        priority,
+        model_name,
+        extra_model_name,
+        dequant_dtype,
+        patch_dtype,
+        patch_on_device,
+        enable_fp16_accumulation,
+        attention_override,
+    ):
+        model_choices = self.get_model_choices()
+        extra_model_choices = self.get_extra_model_choices()
+        final_model = model_name if model_name in model_choices else "none"
+        final_extra_model = extra_model_name if extra_model_name in extra_model_choices else "none"
+        final_dequant_dtype = dequant_dtype if dequant_dtype in self.DEQUANT_DTYPE_CHOICES else "default"
+        final_patch_dtype = patch_dtype if patch_dtype in self.PATCH_DTYPE_CHOICES else "default"
+        final_attention_override = (
+            attention_override if attention_override in self.ATTENTION_OVERRIDE_CHOICES else "none"
+        )
+        return (
+            str(final_model),
+            str(final_extra_model),
+            str(final_dequant_dtype),
+            str(final_patch_dtype),
+            self._coerce_bool(patch_on_device),
+            self._coerce_bool(enable_fp16_accumulation),
+            str(final_attention_override),
+        )
+
 
 class CozyGenNote:
     @classmethod
@@ -1043,14 +1227,18 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenDynamicInput": CozyGenDynamicInput,
     "CozyGenImageInput": CozyGenImageInput,
     "CozyGenFloatInput": CozyGenFloatInput,
+    "CozyGenSimpleFloatInput": CozyGenSimpleFloatInput,
     "CozyGenIntInput": CozyGenIntInput,
+    "CozyGenSimpleIntInput": CozyGenSimpleIntInput,
     "CozyGenSeedInput": CozyGenSeedInput,
     "CozyGenRandomNoiseInput": CozyGenRandomNoiseInput,
     "CozyGenStringInput": CozyGenStringInput,
     "CozyGenChoiceInput": CozyGenChoiceInput,
     "CozyGenLoraInput": CozyGenLoraInput,
     "CozyGenLoraInputMulti": CozyGenLoraInputMulti,
+    "CozyGenWanVideoWrapperModelSelector": CozyGenWanVideoWrapperModelSelector,
     "CozyGenWanVideoModelSelector": CozyGenWanVideoModelSelector,
+    "CozyGenGGUFLoaderKJModelSelector": CozyGenGGUFLoaderKJModelSelector,
     "CozyGenNote": CozyGenNote,
     "CozyGenMetaText": CozyGenMetaText,
     "CozyGenBoolInput": CozyGenBoolInput,
@@ -1068,14 +1256,18 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenDynamicInput": "CozyGen Dynamic Input",
     "CozyGenImageInput": "CozyGen Image Input",
     "CozyGenFloatInput": "CozyGen Float Input",
+    "CozyGenSimpleFloatInput": "CozyGen Simple Float Input",
     "CozyGenIntInput": "CozyGen Int Input",
+    "CozyGenSimpleIntInput": "CozyGen Simple Int Input",
     "CozyGenSeedInput": "CozyGen Seed Input",
     "CozyGenRandomNoiseInput": "CozyGen Random Noise Input",
     "CozyGenStringInput": "CozyGen String Input",
     "CozyGenChoiceInput": "CozyGen Choice Input",
     "CozyGenLoraInput": "CozyGen Lora Input",
     "CozyGenLoraInputMulti": "CozyGen Lora Input Multi",
-    "CozyGenWanVideoModelSelector": "CozyGen WanVideo Model Selector",
+    "CozyGenWanVideoWrapperModelSelector": "CozyGen WanVideoWrapper Model Selector",
+    "CozyGenWanVideoModelSelector": "CozyGen WanVideo Model Selector (Legacy)",
+    "CozyGenGGUFLoaderKJModelSelector": "CozyGen GGUFLoaderKJ Model Selector",
     "CozyGenNote": "CozyGen Note",
     "CozyGenMetaText": "CozyGen Meta Text",
     "CozyGenBoolInput": "CozyGen Bool Input",

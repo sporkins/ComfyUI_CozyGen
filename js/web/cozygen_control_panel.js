@@ -6,13 +6,17 @@ const PRIORITY_MANAGER_NODE_TYPE = "CozyGenPriorityManager";
 const WIDGET_NAME_MAP = {
     CozyGenBoolInput: ["value"],
     CozyGenFloatInput: ["default_value"],
+    CozyGenSimpleFloatInput: ["value"],
     CozyGenIntInput: ["default_value"],
+    CozyGenSimpleIntInput: ["value"],
     CozyGenSeedInput: ["seed"],
     CozyGenRandomNoiseInput: ["noise_seed"],
     CozyGenStringInput: ["default_value"],
     CozyGenChoiceInput: ["default_choice"],
     CozyGenLoraInput: ["lora_value", "strength_value"],
     CozyGenWanVideoModelSelector: ["model_name", "base_precision", "quantization", "load_device"],
+    CozyGenWanVideoWrapperModelSelector: ["model_name", "base_precision", "quantization", "load_device"],
+    CozyGenGGUFLoaderKJModelSelector: ["model_name", "extra_model_name", "dequant_dtype", "patch_dtype", "patch_on_device", "enable_fp16_accumulation", "attention_override"],
     CozyGenDynamicInput: ["default_value"],
     CozyGenImageInput: ["image"],
 };
