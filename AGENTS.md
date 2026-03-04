@@ -62,6 +62,9 @@
 - Never bolt shared media controls onto independent previews without refs. Always centralize play/pause through parent-held refs because per-element controls drift out of sync.
 - Never present selectable compare state as plain text actions when a toggle is intended. Always use a checkbox-style affordance because selection state must be immediately legible.
 - Never add a composite CozyGen selector with dropdowns without adding matching `/cozygen/get_choices` sources for each list because the UI hydrates choices before computing stable defaults.
+- Never rely on virtual-node properties to persist in Cozy workflow exports. Always serialize derived control metadata into node `inputs` because Cozy stores prompt-style JSON.
+- Never apply rgthree bypass UI state by deleting targeted workflow nodes. Always set Comfy `mode` (`ALWAYS`/`BYPASS`/`NEVER`) because removing nodes can break non-input graph branches.
+- Never overload a path-based preview node to support tensor media directly. Always add a dedicated output node for `IMAGES`/`LATENT` inputs because it keeps I/O contracts explicit and avoids brittle mixed parsing logic.
 
 ## PROJECT-SPECIFIC (add as needed)
 

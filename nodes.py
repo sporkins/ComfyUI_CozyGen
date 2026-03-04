@@ -194,6 +194,24 @@ class CozyGenControlPanel:
         return ()
 
 
+class CozyGenBypassControls:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "controls_json": (IO.STRING, {"default": "[]", "multiline": True}),
+            }
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "manage"
+    CATEGORY = "CozyGen/Flow"
+    DESCRIPTION = "Captures RGThree bypass control metadata for CozyGen."
+
+    def manage(self, controls_json="[]"):
+        return ()
+
+
 class CozyGenImageInput(ComfyNodeABC):
     @classmethod
     def INPUT_TYPES(s) -> InputTypeDict:
@@ -641,6 +659,81 @@ class CozyGenVideoPreviewOutputMulti(CozyGenVideoPreviewOutput):
                 )
 
         return {"ui": {"videos": payloads}}
+
+
+class CozyGenImagePreviewOutputMulti(SaveImage):
+    def __init__(self):
+        super().__init__()
+        self.output_dir = folder_paths.get_output_directory()
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "param_name": (IO.STRING, {"default": "Image Preview"}),
+                "priority": (IO.INT, {"default": 10}),
+                "enabled": (IO.BOOLEAN, {"default": True}),
+                "images": (IO.IMAGE,),
+            },
+            "optional": {
+                "filename_prefix": (IO.STRING, {"default": "CozyGen/preview"}),
+            },
+            "hidden": {
+                "run_id": (IO.STRING, {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "preview_images"
+    OUTPUT_NODE = True
+    CATEGORY = "CozyGen"
+
+    def preview_images(self, param_name, priority, enabled, images, filename_prefix="CozyGen/preview", run_id=""):
+        if not enabled:
+            return {"ui": {"images": []}}
+
+        results = super().save_images(images, filename_prefix)
+        saved_images = []
+        if results and isinstance(results, dict):
+            saved_images = results.get("ui", {}).get("images", []) or []
+
+        preview_name = str(param_name).strip() if param_name is not None else ""
+        if not preview_name:
+            preview_name = "Image Preview"
+        try:
+            preview_priority = int(priority)
+        except (TypeError, ValueError):
+            preview_priority = 10
+
+        server_instance = server.PromptServer.instance
+        if server_instance:
+            for order_index, image_info in enumerate(saved_images):
+                filename = str(image_info.get("filename", "")).strip()
+                subfolder = str(image_info.get("subfolder", "")).strip()
+                media_type = str(image_info.get("type", "output")).strip() or "output"
+                if not filename:
+                    continue
+
+                image_url = f"/view?filename={filename}&subfolder={subfolder}&type={media_type}"
+                preview_key = f"{preview_name}:{preview_priority}:{order_index}:{subfolder}/{filename}"
+                message_data = {
+                    "status": "video_generated",
+                    "video_url": image_url,
+                    "filename": filename,
+                    "subfolder": subfolder,
+                    "type": media_type,
+                    "param_name": preview_name,
+                    "priority": preview_priority,
+                    "order": order_index,
+                    "preview_key": preview_key,
+                }
+                server_instance.send_sync("cozygen_video_ready", message_data)
+                print(
+                    "CozyGen: Sent custom WebSocket message: "
+                    f"{{'type': 'cozygen_video_ready', 'data': {message_data}}}"
+                )
+
+        return results
 
 import comfy.samplers
 import comfy.sample
@@ -1224,6 +1317,7 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenVideoOutput": CozyGenVideoOutput,
     "CozyGenVideoPreviewOutput": CozyGenVideoPreviewOutput,
     "CozyGenVideoPreviewOutputMulti": CozyGenVideoPreviewOutputMulti,
+    "CozyGenImagePreviewOutputMulti": CozyGenImagePreviewOutputMulti,
     "CozyGenDynamicInput": CozyGenDynamicInput,
     "CozyGenImageInput": CozyGenImageInput,
     "CozyGenFloatInput": CozyGenFloatInput,
@@ -1246,6 +1340,7 @@ NODE_CLASS_MAPPINGS = {
     "CozyGenEnd": CozyGenEnd,
     "CozyGenPriorityManager": CozyGenPriorityManager,
     "CozyGenControlPanel": CozyGenControlPanel,
+    "CozyGenBypassControls": CozyGenBypassControls,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1253,6 +1348,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenVideoOutput": "CozyGen Video Output",
     "CozyGenVideoPreviewOutput": "CozyGen Video Preview Output",
     "CozyGenVideoPreviewOutputMulti": "CozyGen Video Preview Output Multi",
+    "CozyGenImagePreviewOutputMulti": "CozyGen Image Preview Output Multi",
     "CozyGenDynamicInput": "CozyGen Dynamic Input",
     "CozyGenImageInput": "CozyGen Image Input",
     "CozyGenFloatInput": "CozyGen Float Input",
@@ -1275,5 +1371,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CozyGenEnd": "CozyGen End",
     "CozyGenPriorityManager": "CozyGen Priority Manager",
     "CozyGenControlPanel": "CozyGen Control Panel",
+    "CozyGenBypassControls": "CozyGen Bypass Controls",
 }
 

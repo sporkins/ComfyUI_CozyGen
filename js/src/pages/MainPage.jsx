@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import WorkflowSelector from '../components/WorkflowSelector';
 import DynamicForm from '../components/DynamicForm';
 import ImageInput from '../components/ImageInput'; // Import ImageInput
@@ -135,6 +135,11 @@ const GGUFLOADERKJ_ATTENTION_OVERRIDES = ["none", "sdpa", "sageattn", "xformers"
 const GGUFLOADERKJ_MODEL_NODE_TYPES = ['CozyGenGGUFLoaderKJModelSelector'];
 const HISTORY_SELECTION_KEY = 'historySelection';
 const PRESET_STORAGE_KEY = 'cozygenWorkflowPresetsV1';
+const COZYGEN_BYPASS_CONTROLS_TYPE = 'CozyGenBypassControls';
+const COMFY_MODE_ALWAYS = 0;
+const COMFY_MODE_NEVER = 2;
+const COMFY_MODE_BYPASS = 4;
+const FAST_GROUPS_MUTER_CLASS_TYPES = new Set(['Fast Groups Muter (rgthree)', 'Fast Groups Muter']);
 const COZYGEN_INPUT_TYPES = [
     'CozyGenDynamicInput', 
     'CozyGenImageInput', 
@@ -153,6 +158,97 @@ const COZYGEN_INPUT_TYPES = [
     'CozyGenGGUFLoaderKJModelSelector',
     'CozyGenBoolInput'
 ];
+
+const parseBypassControlRows = (workflow) => {
+  if (!workflow || typeof workflow !== 'object') {
+    return [];
+  }
+  const bypassNodes = findNodesByType(workflow, COZYGEN_BYPASS_CONTROLS_TYPE);
+  const rows = [];
+  for (const bypassNode of bypassNodes) {
+    const rawControls = bypassNode?.inputs?.controls_json;
+    if (typeof rawControls !== 'string' || !rawControls.trim()) {
+      continue;
+    }
+    let parsedControls;
+    try {
+      parsedControls = JSON.parse(rawControls);
+    } catch (error) {
+      console.warn('CozyGen: invalid controls_json on CozyGenBypassControls node.', error);
+      continue;
+    }
+    if (!Array.isArray(parsedControls)) {
+      continue;
+    }
+    parsedControls.forEach((control, index) => {
+      const key = String(control?.id ?? `${bypassNode.id}:${index}`);
+      const targetNodeIds = Array.isArray(control?.target_node_ids)
+        ? control.target_node_ids.map((id) => String(id)).filter(Boolean)
+        : [];
+      if (!key || targetNodeIds.length === 0) {
+        return;
+      }
+      const order = Number.parseInt(String(control?.order ?? index), 10);
+      rows.push({
+        key,
+        order: Number.isFinite(order) ? order : index,
+        title: String(control?.title || `Bypass ${index + 1}`),
+        sourceTitle: String(control?.source_title || bypassNode?._meta?.title || `Bypass Node ${bypassNode.id}`),
+        sourceClassType: String(control?.source_class_type || ''),
+        targetNodeIds,
+        defaultEnabled: control?.default_enabled !== false,
+      });
+    });
+  }
+  const deduped = [];
+  const seen = new Set();
+  rows
+    .sort((a, b) => (a.order - b.order) || a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }))
+    .forEach((row) => {
+      if (seen.has(row.key)) return;
+      seen.add(row.key);
+      deduped.push(row);
+    });
+  return deduped;
+};
+
+const isBypassControlEnabled = (control, bypassControlsState) => {
+  if (!control || !control.key) {
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(bypassControlsState || {}, control.key)) {
+    return Boolean(bypassControlsState[control.key]);
+  }
+  return control.defaultEnabled !== false;
+};
+
+const getDisabledModeForBypassControl = (control) => {
+  if (FAST_GROUPS_MUTER_CLASS_TYPES.has(String(control?.sourceClassType || ''))) {
+    return COMFY_MODE_NEVER;
+  }
+  return COMFY_MODE_BYPASS;
+};
+
+const applyBypassControlModesToWorkflow = (workflow, bypassControls, bypassControlsState) => {
+  if (!workflow || typeof workflow !== 'object' || !Array.isArray(bypassControls) || bypassControls.length === 0) {
+    return;
+  }
+  const orderedControls = [...bypassControls].sort(
+    (a, b) => (Number(a?.order) - Number(b?.order)) || String(a?.key || '').localeCompare(String(b?.key || ''))
+  );
+  orderedControls.forEach((control) => {
+    const enabled = isBypassControlEnabled(control, bypassControlsState);
+    const modeToApply = enabled ? COMFY_MODE_ALWAYS : getDisabledModeForBypassControl(control);
+    (control?.targetNodeIds || []).forEach((targetNodeId) => {
+      const targetNode = workflow[String(targetNodeId)];
+      if (!targetNode || typeof targetNode !== 'object') {
+        return;
+      }
+      targetNode.mode = modeToApply;
+    });
+  });
+};
+
 const getCozyInputCollapseKey = (input) => String(input?.id ?? input?.inputs?.param_name ?? '');
 const getCollapsedStateStorageKey = (workflowName) => (
   workflowName ? `${workflowName}_collapsedInputNodes` : ''
@@ -166,6 +262,23 @@ const readCollapsedStateForWorkflow = (workflowName) => {
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (error) {
     console.warn('CozyGen: failed to read collapsed input state from localStorage.', error);
+    return {};
+  }
+};
+
+const getBypassControlStateStorageKey = (workflowName) => (
+  workflowName ? `${workflowName}_bypassControlsState` : ''
+);
+
+const readBypassControlStateForWorkflow = (workflowName) => {
+  if (!workflowName) return {};
+  try {
+    const raw = localStorage.getItem(getBypassControlStateStorageKey(workflowName));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    console.warn('CozyGen: failed to read bypass controls state from localStorage.', error);
     return {};
   }
 };
@@ -216,9 +329,11 @@ function App() {
   );
   const [workflowData, setWorkflowData] = useState(null);
   const [dynamicInputs, setDynamicInputs] = useState([]);
+  const [bypassControls, setBypassControls] = useState([]);
   const [formData, setFormData] = useState({});
   const [randomizeState, setRandomizeState] = useState({});
   const [bypassedState, setBypassedState] = useState({});
+  const [bypassControlsState, setBypassControlsState] = useState({});
   const [collapsedInputNodes, setCollapsedInputNodes] = useState({});
   const [presetsByWorkflow, setPresetsByWorkflow] = useState(() => readPresetStore());
   const [selectedPresetName, setSelectedPresetName] = useState('');
@@ -362,9 +477,13 @@ function App() {
   }, [selectedWorkflow, collapsedInputNodes]);
 
   const buildInputNames = (inputs) => new Set(inputs.map((input) => input.inputs.param_name));
+  const buildBypassControlKeys = (controls) => new Set(controls.map((control) => control.key));
 
   const filterStateByInputs = (inputNames, stateValues) => Object.fromEntries(
     Object.entries(stateValues || {}).filter(([key]) => inputNames.has(key))
+  );
+  const filterStateByKeys = (keys, stateValues) => Object.fromEntries(
+    Object.entries(stateValues || {}).filter(([key]) => keys.has(key))
   );
 
   const getCurrentWorkflowPresetEntries = () => {
@@ -377,7 +496,13 @@ function App() {
     .sort((a, b) => a.localeCompare(b))
     .map((name) => ({ value: name, label: name }));
 
-  const prepareWorkflowData = useCallback(async (data, savedFormData = {}, savedRandomizeState = {}, savedBypassedState = {}) => {
+  const prepareWorkflowData = useCallback(async (
+    data,
+    savedFormData = {},
+    savedRandomizeState = {},
+    savedBypassedState = {},
+    savedBypassControlsState = {},
+  ) => {
     const workflowCopy = JSON.parse(JSON.stringify(data));
 
     for (const nodeId in workflowCopy) {
@@ -390,6 +515,7 @@ function App() {
     }
 
     const allInputNodes = Object.values(workflowCopy).filter(node => COZYGEN_INPUT_TYPES.includes(node.class_type));
+    const bypassControlRows = parseBypassControlRows(workflowCopy);
 
     for (const nodeId in workflowCopy) {
       if (COZYGEN_INPUT_TYPES.includes(workflowCopy[nodeId].class_type)) {
@@ -474,8 +600,18 @@ function App() {
     }));
 
     const inputNames = buildInputNames(inputsWithChoices);
+    const bypassControlKeys = buildBypassControlKeys(bypassControlRows);
     const filteredRandomizeState = filterStateByInputs(inputNames, savedRandomizeState);
     const filteredBypassedState = filterStateByInputs(inputNames, savedBypassedState);
+    const filteredBypassControlsState = filterStateByKeys(bypassControlKeys, savedBypassControlsState);
+    const normalizedBypassControlsState = {};
+    bypassControlRows.forEach((row) => {
+      if (Object.prototype.hasOwnProperty.call(filteredBypassControlsState, row.key)) {
+        normalizedBypassControlsState[row.key] = Boolean(filteredBypassControlsState[row.key]);
+      } else {
+        normalizedBypassControlsState[row.key] = row.defaultEnabled !== false;
+      }
+    });
 
     const initialFormData = {};
     inputsWithChoices.forEach(input => {
@@ -559,11 +695,20 @@ function App() {
 
     setWorkflowData(workflowCopy);
     setDynamicInputs(inputsWithChoices);
+    setBypassControls(bypassControlRows);
     setFormData(initialFormData);
     setRandomizeState(filteredRandomizeState);
     setBypassedState(filteredBypassedState);
+    setBypassControlsState(normalizedBypassControlsState);
 
-    return { inputsWithChoices, initialFormData, filteredRandomizeState, filteredBypassedState };
+    return {
+      inputsWithChoices,
+      bypassControlRows,
+      initialFormData,
+      filteredRandomizeState,
+      filteredBypassedState,
+      normalizedBypassControlsState,
+    };
   }, []);
 
   const getWorkflowMismatchWarnings = (workflow, objectInfo) => {
@@ -617,6 +762,7 @@ function App() {
     const savedFormData = fields.formData || {};
     const savedRandomizeState = fields.randomizeState || {};
     const savedBypassedState = fields.bypassedState || {};
+    const savedBypassControlsState = fields.bypassControlsState || {};
     const workflowName = fields.selectedWorkflow;
 
     if (workflowName) {
@@ -625,12 +771,22 @@ function App() {
       localStorage.setItem('selectedWorkflow', workflowName);
     }
 
-    await prepareWorkflowData(workflow, savedFormData, savedRandomizeState, savedBypassedState);
+    await prepareWorkflowData(
+      workflow,
+      savedFormData,
+      savedRandomizeState,
+      savedBypassedState,
+      savedBypassControlsState,
+    );
 
     if (workflowName) {
       localStorage.setItem(`${workflowName}_formData`, JSON.stringify(savedFormData));
       localStorage.setItem(`${workflowName}_randomizeState`, JSON.stringify(savedRandomizeState));
       localStorage.setItem(`${workflowName}_bypassedState`, JSON.stringify(savedBypassedState));
+      localStorage.setItem(
+        getBypassControlStateStorageKey(workflowName),
+        JSON.stringify(savedBypassControlsState),
+      );
     }
   }, [prepareWorkflowData]);
 
@@ -964,8 +1120,15 @@ function App() {
         const savedFormData = JSON.parse(localStorage.getItem(`${selectedWorkflow}_formData`)) || {};
         const savedRandomizeState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_randomizeState`)) || {};
         const savedBypassedState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_bypassedState`)) || {};
+        const savedBypassControlsState = readBypassControlStateForWorkflow(selectedWorkflow);
 
-        await prepareWorkflowData(data, savedFormData, savedRandomizeState, savedBypassedState);
+        await prepareWorkflowData(
+          data,
+          savedFormData,
+          savedRandomizeState,
+          savedBypassedState,
+          savedBypassControlsState,
+        );
 
       } catch (error) {
         console.error(error);
@@ -996,9 +1159,11 @@ function App() {
     localStorage.setItem('selectedWorkflow', workflow);
     setWorkflowData(null);
     setDynamicInputs([]);
+    setBypassControls([]);
     setCollapsedInputNodes({});
     setFormData({});
     setRandomizeState({});
+    setBypassControlsState({});
     setPreviewImages([]);
     videoPreviewEntriesRef.current = {};
     runIdRef.current = '';
@@ -1020,6 +1185,12 @@ function App() {
     const newBypassedState = { ...bypassedState, [inputName]: isBypassed };
     setBypassedState(newBypassedState);
     localStorage.setItem(`${selectedWorkflow}_bypassedState`, JSON.stringify(newBypassedState));
+  };
+
+  const handleBypassControlToggle = (controlKey, isEnabled) => {
+    const newState = { ...bypassControlsState, [controlKey]: isEnabled };
+    setBypassControlsState(newState);
+    localStorage.setItem(getBypassControlStateStorageKey(selectedWorkflow), JSON.stringify(newState));
   };
 
   const handleToggleInputCollapse = (inputKey) => {
@@ -1070,6 +1241,7 @@ function App() {
       formData: JSON.parse(JSON.stringify(formData || {})),
       randomizeState: JSON.parse(JSON.stringify(randomizeState || {})),
       bypassedState: JSON.parse(JSON.stringify(bypassedState || {})),
+      bypassControlsState: JSON.parse(JSON.stringify(bypassControlsState || {})),
     };
 
     const nextStore = {
@@ -1111,13 +1283,16 @@ function App() {
     }
 
     const inputNames = buildInputNames(dynamicInputs);
+    const bypassControlKeys = buildBypassControlKeys(bypassControls);
+    const allowedPresetKeys = new Set([...inputNames, ...bypassControlKeys]);
     const presetKeys = new Set([
       ...Object.keys(preset.formData || {}),
       ...Object.keys(preset.randomizeState || {}),
       ...Object.keys(preset.bypassedState || {}),
+      ...Object.keys(preset.bypassControlsState || {}),
     ]);
     const missingFields = [...presetKeys]
-      .filter((key) => !inputNames.has(key))
+      .filter((key) => !allowedPresetKeys.has(key))
       .sort((a, b) => a.localeCompare(b));
 
     if (missingFields.length > 0) {
@@ -1136,17 +1311,27 @@ function App() {
     const filteredPresetFormData = filterStateByInputs(inputNames, preset.formData || {});
     const filteredPresetRandomize = filterStateByInputs(inputNames, preset.randomizeState || {});
     const filteredPresetBypassed = filterStateByInputs(inputNames, preset.bypassedState || {});
+    const filteredPresetBypassControls = filterStateByKeys(
+      bypassControlKeys,
+      preset.bypassControlsState || {},
+    );
 
     const nextFormData = { ...formData, ...filteredPresetFormData };
     const nextRandomizeState = { ...randomizeState, ...filteredPresetRandomize };
     const nextBypassedState = { ...bypassedState, ...filteredPresetBypassed };
+    const nextBypassControlsState = { ...bypassControlsState, ...filteredPresetBypassControls };
 
     setFormData(nextFormData);
     setRandomizeState(nextRandomizeState);
     setBypassedState(nextBypassedState);
+    setBypassControlsState(nextBypassControlsState);
     localStorage.setItem(`${selectedWorkflow}_formData`, JSON.stringify(nextFormData));
     localStorage.setItem(`${selectedWorkflow}_randomizeState`, JSON.stringify(nextRandomizeState));
     localStorage.setItem(`${selectedWorkflow}_bypassedState`, JSON.stringify(nextBypassedState));
+    localStorage.setItem(
+      getBypassControlStateStorageKey(selectedWorkflow),
+      JSON.stringify(nextBypassControlsState),
+    );
     setPresetNameInput(selectedPresetName);
   };
 
@@ -1243,10 +1428,16 @@ function App() {
 
         let finalWorkflow = JSON.parse(JSON.stringify(workflowData));
         const metaTextLines = [];
+        const externallyBypassedNodeIds = new Set(externallyBypassedInputIds);
+        applyBypassControlModesToWorkflow(finalWorkflow, bypassControls, bypassControlsState);
 
         // --- Bypass and Value Injection Logic (condensed for brevity) ---
         const COZYGEN_INPUT_TYPES_WITH_BYPASS = ['CozyGenDynamicInput', 'CozyGenChoiceInput'];
-        const bypassedNodes = dynamicInputs.filter(dn => bypassedState[dn.inputs.param_name] && COZYGEN_INPUT_TYPES_WITH_BYPASS.includes(dn.class_type));
+        const bypassedNodes = dynamicInputs.filter((dn) => (
+          !externallyBypassedNodeIds.has(String(dn.id))
+          && bypassedState[dn.inputs.param_name]
+          && COZYGEN_INPUT_TYPES_WITH_BYPASS.includes(dn.class_type)
+        ));
         
         for (const bypassedNode of bypassedNodes) {
             // Find the node that our CozyGen input is connected to (e.g., a LoraLoader).
@@ -1299,6 +1490,7 @@ function App() {
 
         let updatedFormData = { ...formData };
         dynamicInputs.forEach(dynamicNode => {
+            if (externallyBypassedNodeIds.has(String(dynamicNode.id))) return;
             if (!finalWorkflow[dynamicNode.id]) return;
             const param_name = dynamicNode.inputs.param_name;
             if (dynamicNode.class_type === 'CozyGenImageInput') return;
@@ -1377,7 +1569,10 @@ function App() {
         setFormData(updatedFormData);
         localStorage.setItem(`${selectedWorkflow}_formData`, JSON.stringify(updatedFormData));
 
-        const imageInputNodes = dynamicInputs.filter(dn => dn.class_type === 'CozyGenImageInput');
+        const imageInputNodes = dynamicInputs.filter((dn) => (
+          dn.class_type === 'CozyGenImageInput'
+          && !externallyBypassedNodeIds.has(String(dn.id))
+        ));
         for (const node of imageInputNodes) {
             const image_filename = formData[node.inputs.param_name];
             if (!image_filename) {
@@ -1403,7 +1598,7 @@ function App() {
             if(node.class_type === "CozyGenMetaText") {
                 node.inputs.value = metaTextLines.join("\n");
             }
-            if (["CozyGenOutput", "CozyGenVideoOutput", "CozyGenVideoPreviewOutput", "CozyGenVideoPreviewOutputMulti", "CozyGenEnd"].includes(node.class_type)) {
+            if (["CozyGenOutput", "CozyGenVideoOutput", "CozyGenVideoPreviewOutput", "CozyGenVideoPreviewOutputMulti", "CozyGenImagePreviewOutputMulti", "CozyGenEnd"].includes(node.class_type)) {
                 node.inputs.run_id = runId;
             }
         }
@@ -1429,6 +1624,7 @@ function App() {
               formData: updatedFormData,
               randomizeState,
               bypassedState,
+              bypassControlsState,
               selectedWorkflow,
             },
           });
@@ -1451,7 +1647,21 @@ function App() {
     localStorage.removeItem('lastPreviewImages');
   };
 
-  const controlInputs = dynamicInputs
+  const externallyBypassedInputIds = useMemo(() => {
+    const nodeIds = new Set();
+    bypassControls.forEach((control) => {
+      const enabled = isBypassControlEnabled(control, bypassControlsState);
+      if (enabled) return;
+      (control.targetNodeIds || []).forEach((nodeId) => nodeIds.add(String(nodeId)));
+    });
+    return nodeIds;
+  }, [bypassControls, bypassControlsState]);
+
+  const visibleDynamicInputs = dynamicInputs.filter(
+    (input) => !externallyBypassedInputIds.has(String(input.id)),
+  );
+
+  const controlInputs = visibleDynamicInputs
     .filter(input => input.class_type !== 'CozyGenImageInput')
     .map(input => {
       if (['CozyGenFloatInput', 'CozyGenSimpleFloatInput', 'CozyGenIntInput', 'CozyGenSimpleIntInput', 'CozyGenSeedInput', 'CozyGenRandomNoiseInput', 'CozyGenStringInput', 'CozyGenChoiceInput', 'CozyGenLoraInput', 'CozyGenLoraInputMulti', ...WANVIDEO_MODEL_NODE_TYPES, ...GGUFLOADERKJ_MODEL_NODE_TYPES, 'CozyGenBoolInput'].includes(input.class_type)) {
@@ -1488,7 +1698,7 @@ function App() {
       }
       return input;
     });
-  const hasImageInput = dynamicInputs.some(input => input.class_type === 'CozyGenImageInput');
+  const hasImageInput = visibleDynamicInputs.some(input => input.class_type === 'CozyGenImageInput');
   const presetOptions = getCurrentWorkflowPresetOptions();
   const workflowNotes = getWorkflowNotes(workflowData);
   const workflowNoteOptions = workflowNotes.map((note) => ({ value: note.id, label: note.title }));
@@ -1622,11 +1832,43 @@ function App() {
                         />
                     </div>
                 )}
-                {dynamicInputs.length > 0 && (
+                {bypassControls.length > 0 && (
+                    <div className="bg-base-200 shadow-lg rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                            <h2 className="text-lg font-semibold text-white">Bypass Controls</h2>
+                            <span className="text-xs text-gray-400">{bypassControls.length}</span>
+                        </div>
+                        <div className="space-y-2">
+                            {bypassControls.map((control) => {
+                                const isEnabled = Object.prototype.hasOwnProperty.call(bypassControlsState, control.key)
+                                  ? Boolean(bypassControlsState[control.key])
+                                  : control.defaultEnabled !== false;
+                                return (
+                                    <label
+                                        key={control.key}
+                                        className="flex items-center justify-between gap-3 rounded-md border border-base-300/70 bg-base-300/20 p-2"
+                                    >
+                                        <div className="min-w-0">
+                                            <div className="text-sm text-white truncate">{control.title}</div>
+                                            <div className="text-xs text-gray-400 truncate">{control.sourceTitle}</div>
+                                        </div>
+                                        <input
+                                            type="checkbox"
+                                            className="toggle toggle-sm toggle-accent"
+                                            checked={isEnabled}
+                                            onChange={(event) => handleBypassControlToggle(control.key, event.target.checked)}
+                                        />
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+                {visibleDynamicInputs.length > 0 && (
                     <div className="bg-base-200 shadow-lg rounded-lg p-3">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                             <div className="text-sm text-gray-300">
-                                Input Groups: <span className="font-semibold text-white">{dynamicInputs.length}</span>
+                                Input Groups: <span className="font-semibold text-white">{visibleDynamicInputs.length}</span>
                             </div>
                             <div className="flex gap-2">
                                 <button
@@ -1648,7 +1890,7 @@ function App() {
                     </div>
                 )}
                 {/* Render ImageInput separately */}
-                {dynamicInputs.filter(input => input.class_type === 'CozyGenImageInput').map(input => (
+                {visibleDynamicInputs.filter(input => input.class_type === 'CozyGenImageInput').map(input => (
                     <ImageInput
                         key={input.id}
                         input={input}
