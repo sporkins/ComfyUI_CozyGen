@@ -342,7 +342,7 @@ const HistoryDetail = () => {
       return;
     }
     localStorage.setItem(HISTORY_SELECTION_KEY, JSON.stringify(historyItem));
-    navigate('/');
+    navigate('/generate');
   };
 
   if (isLoading) {
@@ -403,7 +403,7 @@ const HistoryDetail = () => {
           </div>
         </div>
         <p className="text-xs text-gray-400">
-          This page shows the saved settings payload. Use <span className="text-white">Generate</span> to open the Generate page and apply it.
+          This page shows the saved settings payload. Use <span className="text-white">Generate</span> to open the Generate workspace and apply it.
         </p>
         {copyStatus && (
           <p className="text-xs text-green-300">{copyStatus}</p>

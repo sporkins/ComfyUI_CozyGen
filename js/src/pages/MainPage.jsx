@@ -3,10 +3,19 @@ import WorkflowSelector from '../components/WorkflowSelector';
 import DynamicForm from '../components/DynamicForm';
 import ImageInput from '../components/ImageInput'; // Import ImageInput
 import SearchableSelect from '../components/SearchableSelect';
+import { useNavigate } from 'react-router-dom';
 import { getWorkflows, getWorkflow, queuePrompt, getChoices, getQueue, getViewUrl, getCozyMediaUrl, getHistory, getObjectInfo, saveCozyHistoryItem, updateCozyHistoryItem, getCozySession, saveCozySession, getCozyPresets, saveCozyPresets } from '../api';
 import Modal from 'react-modal';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { extractHistoryMedia } from '../utils/historyUtils';
+import {
+  getActiveProjectContext,
+  PROJECTS_STATE_KEY,
+  readJsonStorage,
+  getProjectWorkflowDefaults,
+  setActiveProjectContext,
+  upsertProjectWorkflowDefaults,
+} from '../utils/projectUtils';
 
 // Modal styles (copied from Gallery.jsx for consistency)
 const isVideo = (url) => /\.(mp4|webm)/i.test(url);
@@ -135,6 +144,9 @@ const GGUFLOADERKJ_ATTENTION_OVERRIDES = ["none", "sdpa", "sageattn", "xformers"
 const GGUFLOADERKJ_MODEL_NODE_TYPES = ['CozyGenGGUFLoaderKJModelSelector'];
 const HISTORY_SELECTION_KEY = 'historySelection';
 const PRESET_STORAGE_KEY = 'cozygenWorkflowPresetsV1';
+const RUN_START_STORAGE_PREFIX = 'cozygenRunStartMs:';
+const FALLBACK_PROJECT_ID = 'project-1';
+const FALLBACK_PROJECT_NAME = 'Project 1';
 const COZYGEN_BYPASS_CONTROLS_TYPE = 'CozyGenBypassControls';
 const COMFY_MODE_ALWAYS = 0;
 const COMFY_MODE_NEVER = 2;
@@ -322,11 +334,38 @@ const mergePresetStores = (serverStore, localStore) => {
   return merged;
 };
 
+const getCurrentProjectContext = () => {
+  const ctx = getActiveProjectContext();
+  const projectId = String(ctx?.projectId || '').trim() || FALLBACK_PROJECT_ID;
+  const projectsState = readJsonStorage(PROJECTS_STATE_KEY, null);
+  const knownProjects = Array.isArray(projectsState?.projects) ? projectsState.projects : [];
+  const knownProject = knownProjects.find((project) => String(project?.id || '').trim() === projectId);
+  const canonicalName = String(knownProject?.name || '').trim();
+  const projectName = canonicalName || String(ctx?.projectName || '').trim() || FALLBACK_PROJECT_NAME;
+  return { projectId, projectName };
+};
+
+const getRunStartStorageKey = (promptId) => `${RUN_START_STORAGE_PREFIX}${String(promptId || '')}`;
+const sanitizePreviewUrls = (items) => (
+  (Array.isArray(items) ? items : [])
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean)
+);
+const readStoredPreviewUrls = () => {
+  try {
+    return sanitizePreviewUrls(JSON.parse(localStorage.getItem('lastPreviewImages') || '[]'));
+  } catch {
+    return [];
+  }
+};
+
 function App() {
+  const navigate = useNavigate();
+  const initialActiveContext = getActiveProjectContext();
   const [workflows, setWorkflows] = useState([]);
-  const [selectedWorkflow, setSelectedWorkflow] = useState(
-    localStorage.getItem('selectedWorkflow') || null
-  );
+  const [selectedWorkflow, setSelectedWorkflow] = useState(() => (
+    String(initialActiveContext?.defaultWorkflow || '').trim() || localStorage.getItem('selectedWorkflow') || null
+  ));
   const [workflowData, setWorkflowData] = useState(null);
   const [dynamicInputs, setDynamicInputs] = useState([]);
   const [bypassControls, setBypassControls] = useState([]);
@@ -338,7 +377,7 @@ function App() {
   const [presetsByWorkflow, setPresetsByWorkflow] = useState(() => readPresetStore());
   const [selectedPresetName, setSelectedPresetName] = useState('');
   const [presetNameInput, setPresetNameInput] = useState('');
-  const [previewImages, setPreviewImages] = useState(JSON.parse(localStorage.getItem('lastPreviewImages')) || []);
+  const [previewImages, setPreviewImages] = useState(() => readStoredPreviewUrls());
   const [selectedPreviewImage, setSelectedPreviewImage] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const websocketRef = useRef(null);
@@ -353,6 +392,8 @@ function App() {
   const skipWorkflowFetchRef = useRef(false);
   const videoPreviewEntriesRef = useRef({});
   const runIdRef = useRef('');
+  const runStartTimesRef = useRef({});
+  const appliedProjectPresetKeyRef = useRef('');
   const skipNextCollapsedStateSaveRef = useRef(false);
 
   useEffect(() => {
@@ -430,6 +471,15 @@ function App() {
     const firstPresetName = [...presetNames].sort((a, b) => a.localeCompare(b))[0] || '';
     setSelectedPresetName(firstPresetName);
   }, [selectedWorkflow, presetsByWorkflow, selectedPresetName]);
+
+  useEffect(() => {
+    if (selectedWorkflow) return;
+    const activeContext = getActiveProjectContext();
+    const workflowFromProject = String(activeContext?.defaultWorkflow || '').trim();
+    if (!workflowFromProject) return;
+    setSelectedWorkflow(workflowFromProject);
+    localStorage.setItem('selectedWorkflow', workflowFromProject);
+  }, [selectedWorkflow]);
 
   useEffect(() => {
     setCollapsedInputNodes((prev) => {
@@ -738,6 +788,20 @@ function App() {
     return warnings;
   };
 
+  const persistProjectDefaults = useCallback((workflowName, nextState = {}) => {
+    const workflow = String(workflowName || '').trim();
+    if (!workflow) return;
+    const projectContext = getCurrentProjectContext();
+    if (!projectContext?.projectId) return;
+    upsertProjectWorkflowDefaults(projectContext.projectId, workflow, {
+      formData: JSON.parse(JSON.stringify(nextState.formData || {})),
+      randomizeState: JSON.parse(JSON.stringify(nextState.randomizeState || {})),
+      bypassedState: JSON.parse(JSON.stringify(nextState.bypassedState || {})),
+      bypassControlsState: JSON.parse(JSON.stringify(nextState.bypassControlsState || {})),
+      updated_at: new Date().toISOString(),
+    });
+  }, []);
+
   const applyHistorySelection = useCallback(async (historyItem) => {
     if (!historyItem?.json) return;
     const workflow = historyItem.json?.prompt || historyItem.json;
@@ -787,8 +851,14 @@ function App() {
         getBypassControlStateStorageKey(workflowName),
         JSON.stringify(savedBypassControlsState),
       );
+      persistProjectDefaults(workflowName, {
+        formData: savedFormData,
+        randomizeState: savedRandomizeState,
+        bypassedState: savedBypassedState,
+        bypassControlsState: savedBypassControlsState,
+      });
     }
-  }, [prepareWorkflowData]);
+  }, [prepareWorkflowData, persistProjectDefaults]);
 
   const openModalWithImage = (imageSrc) => {
     setSelectedPreviewImage(imageSrc);
@@ -799,6 +869,50 @@ function App() {
     setIsNoteModalOpen(false);
     setSelectedNoteId('');
   };
+
+  const persistRunStartTime = useCallback((promptId, startedAtIso) => {
+    if (!promptId) return;
+    const startMs = new Date(startedAtIso || new Date().toISOString()).getTime();
+    if (!Number.isFinite(startMs) || startMs <= 0) return;
+    const key = getRunStartStorageKey(promptId);
+    runStartTimesRef.current[String(promptId)] = startMs;
+    localStorage.setItem(key, String(startMs));
+  }, []);
+
+  const finalizeRunMetadata = useCallback((promptId, status = 'finished') => {
+    if (!promptId) return;
+    const safePromptId = String(promptId);
+    const finishedAt = new Date().toISOString();
+    const inMemoryStart = Number(runStartTimesRef.current[safePromptId]);
+    const storedStart = Number(localStorage.getItem(getRunStartStorageKey(safePromptId)));
+    const resolvedStart = Number.isFinite(inMemoryStart) && inMemoryStart > 0
+      ? inMemoryStart
+      : (Number.isFinite(storedStart) && storedStart > 0 ? storedStart : null);
+    const payload = {
+      status,
+      finished_at: finishedAt,
+    };
+    const sessionPayload = {
+      id: safePromptId,
+      status,
+      finished_at: finishedAt,
+      updated_at: finishedAt,
+    };
+    if (resolvedStart) {
+      const runtimeMs = Math.max(0, new Date(finishedAt).getTime() - resolvedStart);
+      payload.started_at = new Date(resolvedStart).toISOString();
+      if (runtimeMs > 0) {
+        payload.runtime_ms = runtimeMs;
+        sessionPayload.runtime_ms = runtimeMs;
+      }
+    }
+    updateCozyHistoryItem(safePromptId, payload).catch((error) => {
+      console.warn(`CozyGen: failed to update run metadata for ${safePromptId}`, error);
+    });
+    saveCozySession(sessionPayload).catch(() => {});
+    delete runStartTimesRef.current[safePromptId];
+    localStorage.removeItem(getRunStartStorageKey(safePromptId));
+  }, []);
 
   // --- WebSocket Connection ---
   const connectWebSocket = useCallback(() => {
@@ -824,9 +938,9 @@ function App() {
           const historyData = await getHistory(promptId);
           const historyEntry = historyData?.[promptId] || historyData?.history?.[promptId] || null;
           const mediaItems = extractHistoryMedia(historyEntry);
-          const previewUrls = mediaItems.map((media) => (
+          const previewUrls = sanitizePreviewUrls(mediaItems.map((media) => (
             getCozyMediaUrl(media.filename, media.subfolder, media.type)
-          ));
+          )));
           if (previewUrls.length === 0) {
             continue;
           }
@@ -864,7 +978,15 @@ function App() {
       const msg = JSON.parse(event.data);
 
       if (msg.type === 'cozygen_batch_ready') {
-          const imageUrls = msg.data.images.map(image => image.url);
+          const imageUrls = sanitizePreviewUrls(
+            (Array.isArray(msg?.data?.images) ? msg.data.images : []).map((image) => {
+              if (image?.url) return image.url;
+              if (image?.filename) {
+                return getCozyMediaUrl(image.filename, image.subfolder || '', image.type || 'output');
+              }
+              return '';
+            })
+          );
           if (imageUrls.length > 0) {
               setPreviewImages(imageUrls);
               localStorage.setItem('lastPreviewImages', JSON.stringify(imageUrls));
@@ -885,6 +1007,9 @@ function App() {
             preview_images: imageUrls,
             updated_at: new Date().toISOString(),
           }).catch(() => {});
+          if (lastPromptId) {
+            finalizeRunMetadata(lastPromptId, 'finished');
+          }
         } else if (msg.type === 'cozygen_video_ready') {
           const data = msg?.data || {};
           const videoUrl = data.video_url
@@ -902,13 +1027,13 @@ function App() {
               param_name: String(previewName),
             };
           }
-          const previewUrls = Object.values(videoPreviewEntriesRef.current)
+          const previewUrls = sanitizePreviewUrls(Object.values(videoPreviewEntriesRef.current)
             .sort((a, b) => {
               if (a.priority !== b.priority) return a.priority - b.priority;
               if (a.order !== b.order) return a.order - b.order;
               return a.param_name.localeCompare(b.param_name);
             })
-            .map((entry) => entry.url);
+            .map((entry) => entry.url));
           if (previewUrls.length > 0) {
             setPreviewImages(previewUrls);
             localStorage.setItem('lastPreviewImages', JSON.stringify(previewUrls));
@@ -929,17 +1054,16 @@ function App() {
             preview_images: previewUrls,
             updated_at: new Date().toISOString(),
           }).catch(() => {});
+          if (lastPromptId) {
+            finalizeRunMetadata(lastPromptId, 'finished');
+          }
         } else if (msg.type === 'cozygen_run_end') {
           const eventRunId = msg?.data?.run_id;
           if (eventRunId && runIdRef.current && eventRunId !== runIdRef.current) {
             return;
           }
           let latestPreviewImages = [];
-          try {
-            latestPreviewImages = JSON.parse(localStorage.getItem('lastPreviewImages') || '[]');
-          } catch {
-            latestPreviewImages = [];
-          }
+          latestPreviewImages = readStoredPreviewUrls();
           setIsLoading(false);
           setProgressValue(0);
           setProgressMax(0);
@@ -952,6 +1076,7 @@ function App() {
               preview_images: latestPreviewImages,
               updated_at: new Date().toISOString(),
             }).catch(() => {});
+            finalizeRunMetadata(lastPromptId, 'finished');
             if (!Array.isArray(latestPreviewImages) || latestPreviewImages.length === 0) {
               void backfillHistoryPreviewsFromComfyHistory(lastPromptId);
             }
@@ -996,11 +1121,7 @@ function App() {
             return;
           }
           let latestPreviewImages = [];
-          try {
-            latestPreviewImages = JSON.parse(localStorage.getItem('lastPreviewImages') || '[]');
-          } catch {
-            latestPreviewImages = [];
-          }
+          latestPreviewImages = readStoredPreviewUrls();
           setIsLoading(false);
           setProgressValue(0);
           setProgressMax(0);
@@ -1012,6 +1133,7 @@ function App() {
               preview_images: latestPreviewImages,
               updated_at: new Date().toISOString(),
             }).catch(() => {});
+            finalizeRunMetadata(activePromptId, 'interrupted');
             if (!Array.isArray(latestPreviewImages) || latestPreviewImages.length === 0) {
               void backfillHistoryPreviewsFromComfyHistory(activePromptId);
             }
@@ -1027,7 +1149,7 @@ function App() {
       console.error('CozyGen: WebSocket error: ', err);
       websocketRef.current.close();
     };
-  }, []);
+  }, [finalizeRunMetadata]);
 
   useEffect(() => {
     connectWebSocket();
@@ -1058,10 +1180,21 @@ function App() {
         const session = await getCozySession();
         if (!session?.id) return;
         localStorage.setItem('lastPromptId', session.id);
+        const existingProjectId = String(getActiveProjectContext()?.projectId || '').trim();
+        if (!existingProjectId && session?.project_id) {
+          setActiveProjectContext({
+            projectId: String(session.project_id),
+            projectName: String(session.project_name || ''),
+          });
+        }
+        if (session?.run_started_at) {
+          persistRunStartTime(session.id, session.run_started_at);
+        }
 
-        if (Array.isArray(session.preview_images) && session.preview_images.length > 0) {
-          setPreviewImages(session.preview_images);
-          localStorage.setItem('lastPreviewImages', JSON.stringify(session.preview_images));
+        const sessionPreviewUrls = sanitizePreviewUrls(session.preview_images);
+        if (sessionPreviewUrls.length > 0) {
+          setPreviewImages(sessionPreviewUrls);
+          localStorage.setItem('lastPreviewImages', JSON.stringify(sessionPreviewUrls));
           setStatusText(session.status === 'finished' ? 'Finished' : 'Generating...');
         }
         if (session?.progress && typeof session.progress.value === 'number') {
@@ -1086,6 +1219,7 @@ function App() {
           isActive = activeIds.has(session.id);
         } catch (error) {
           console.warn('CozyGen: failed to read queue for session restore', error);
+          isActive = Boolean(session?.status && session.status !== 'finished');
         }
 
         if (isActive) {
@@ -1104,7 +1238,7 @@ function App() {
     };
 
     loadSession();
-  }, [connectWebSocket]);
+  }, [connectWebSocket, persistRunStartTime]);
 
   useEffect(() => {
     if (!selectedWorkflow) return;
@@ -1117,10 +1251,24 @@ function App() {
         }
 
         const data = await getWorkflow(selectedWorkflow);
-        const savedFormData = JSON.parse(localStorage.getItem(`${selectedWorkflow}_formData`)) || {};
-        const savedRandomizeState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_randomizeState`)) || {};
-        const savedBypassedState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_bypassedState`)) || {};
-        const savedBypassControlsState = readBypassControlStateForWorkflow(selectedWorkflow);
+        const projectContext = getCurrentProjectContext();
+        const projectDefaults = getProjectWorkflowDefaults(projectContext.projectId, selectedWorkflow) || {};
+        const fallbackFormData = JSON.parse(localStorage.getItem(`${selectedWorkflow}_formData`)) || {};
+        const fallbackRandomizeState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_randomizeState`)) || {};
+        const fallbackBypassedState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_bypassedState`)) || {};
+        const fallbackBypassControlsState = readBypassControlStateForWorkflow(selectedWorkflow);
+        const savedFormData = projectDefaults?.formData && typeof projectDefaults.formData === 'object'
+          ? projectDefaults.formData
+          : fallbackFormData;
+        const savedRandomizeState = projectDefaults?.randomizeState && typeof projectDefaults.randomizeState === 'object'
+          ? projectDefaults.randomizeState
+          : fallbackRandomizeState;
+        const savedBypassedState = projectDefaults?.bypassedState && typeof projectDefaults.bypassedState === 'object'
+          ? projectDefaults.bypassedState
+          : fallbackBypassedState;
+        const savedBypassControlsState = projectDefaults?.bypassControlsState && typeof projectDefaults.bypassControlsState === 'object'
+          ? projectDefaults.bypassControlsState
+          : fallbackBypassControlsState;
 
         await prepareWorkflowData(
           data,
@@ -1173,24 +1321,48 @@ function App() {
     const newFormData = { ...formData, [inputName]: value };
     setFormData(newFormData);
     localStorage.setItem(`${selectedWorkflow}_formData`, JSON.stringify(newFormData));
+    persistProjectDefaults(selectedWorkflow, {
+      formData: newFormData,
+      randomizeState,
+      bypassedState,
+      bypassControlsState,
+    });
   };
 
   const handleRandomizeToggle = (inputName, isRandom) => {
     const newRandomizeState = { ...randomizeState, [inputName]: isRandom };
     setRandomizeState(newRandomizeState);
     localStorage.setItem(`${selectedWorkflow}_randomizeState`, JSON.stringify(newRandomizeState));
+    persistProjectDefaults(selectedWorkflow, {
+      formData,
+      randomizeState: newRandomizeState,
+      bypassedState,
+      bypassControlsState,
+    });
   };
 
   const handleBypassToggle = (inputName, isBypassed) => {
     const newBypassedState = { ...bypassedState, [inputName]: isBypassed };
     setBypassedState(newBypassedState);
     localStorage.setItem(`${selectedWorkflow}_bypassedState`, JSON.stringify(newBypassedState));
+    persistProjectDefaults(selectedWorkflow, {
+      formData,
+      randomizeState,
+      bypassedState: newBypassedState,
+      bypassControlsState,
+    });
   };
 
   const handleBypassControlToggle = (controlKey, isEnabled) => {
     const newState = { ...bypassControlsState, [controlKey]: isEnabled };
     setBypassControlsState(newState);
     localStorage.setItem(getBypassControlStateStorageKey(selectedWorkflow), JSON.stringify(newState));
+    persistProjectDefaults(selectedWorkflow, {
+      formData,
+      randomizeState,
+      bypassedState,
+      bypassControlsState: newState,
+    });
   };
 
   const handleToggleInputCollapse = (inputKey) => {
@@ -1266,20 +1438,28 @@ function App() {
     }
   };
 
-  const handleLoadPreset = () => {
+  const applyPresetByName = useCallback((presetName, options = {}) => {
+    const { silent = false, skipMissingFieldConfirm = false } = options;
+    const normalizedPresetName = String(presetName || '').trim();
     if (!selectedWorkflow) {
-      window.alert('Select a workflow before loading a preset.');
-      return;
+      if (!silent) {
+        window.alert('Select a workflow before loading a preset.');
+      }
+      return false;
     }
-    if (!selectedPresetName) {
-      window.alert('Select a preset to load.');
-      return;
+    if (!normalizedPresetName) {
+      if (!silent) {
+        window.alert('Select a preset to load.');
+      }
+      return false;
     }
 
-    const preset = presetsByWorkflow?.[selectedWorkflow]?.[selectedPresetName];
+    const preset = presetsByWorkflow?.[selectedWorkflow]?.[normalizedPresetName];
     if (!preset) {
-      window.alert(`Preset "${selectedPresetName}" was not found.`);
-      return;
+      if (!silent) {
+        window.alert(`Preset "${normalizedPresetName}" was not found.`);
+      }
+      return false;
     }
 
     const inputNames = buildInputNames(dynamicInputs);
@@ -1295,16 +1475,16 @@ function App() {
       .filter((key) => !allowedPresetKeys.has(key))
       .sort((a, b) => a.localeCompare(b));
 
-    if (missingFields.length > 0) {
+    if (missingFields.length > 0 && !skipMissingFieldConfirm) {
       const visibleFields = missingFields.slice(0, 20);
       const remainingCount = missingFields.length - visibleFields.length;
       const proceed = window.confirm(
-        `Preset "${selectedPresetName}" has fields that do not exist in the current workflow:\n\n${visibleFields.join('\n')}${
+        `Preset "${normalizedPresetName}" has fields that do not exist in the current workflow:\n\n${visibleFields.join('\n')}${
           remainingCount > 0 ? `\n...and ${remainingCount} more` : ''
         }\n\nApply matching fields anyway?`
       );
       if (!proceed) {
-        return;
+        return false;
       }
     }
 
@@ -1332,8 +1512,39 @@ function App() {
       getBypassControlStateStorageKey(selectedWorkflow),
       JSON.stringify(nextBypassControlsState),
     );
-    setPresetNameInput(selectedPresetName);
+    setSelectedPresetName(normalizedPresetName);
+    setPresetNameInput(normalizedPresetName);
+    persistProjectDefaults(selectedWorkflow, {
+      formData: nextFormData,
+      randomizeState: nextRandomizeState,
+      bypassedState: nextBypassedState,
+      bypassControlsState: nextBypassControlsState,
+    });
+    return true;
+  }, [selectedWorkflow, presetsByWorkflow, dynamicInputs, bypassControls, formData, randomizeState, bypassedState, bypassControlsState, persistProjectDefaults]);
+
+  const handleLoadPreset = () => {
+    applyPresetByName(selectedPresetName);
   };
+
+  useEffect(() => {
+    if (!selectedWorkflow) return;
+    const activeContext = getActiveProjectContext();
+    const projectId = String(activeContext?.projectId || '').trim();
+    const presetDefaults = activeContext?.workflowPresetDefaults;
+    if (!presetDefaults || typeof presetDefaults !== 'object') return;
+    const presetForWorkflow = String(presetDefaults[selectedWorkflow] || '').trim();
+    if (!presetForWorkflow) return;
+    const applyKey = `${projectId}:${selectedWorkflow}:${presetForWorkflow}`;
+    if (appliedProjectPresetKeyRef.current === applyKey) return;
+    const didApply = applyPresetByName(presetForWorkflow, {
+      silent: true,
+      skipMissingFieldConfirm: true,
+    });
+    if (didApply) {
+      appliedProjectPresetKeyRef.current = applyKey;
+    }
+  }, [selectedWorkflow, applyPresetByName]);
 
   const handleDeletePreset = async () => {
     if (!selectedWorkflow || !selectedPresetName) {
@@ -1568,6 +1779,12 @@ function App() {
         });
         setFormData(updatedFormData);
         localStorage.setItem(`${selectedWorkflow}_formData`, JSON.stringify(updatedFormData));
+        persistProjectDefaults(selectedWorkflow, {
+          formData: updatedFormData,
+          randomizeState,
+          bypassedState,
+          bypassControlsState,
+        });
 
         const imageInputNodes = dynamicInputs.filter((dn) => (
           dn.class_type === 'CozyGenImageInput'
@@ -1608,19 +1825,31 @@ function App() {
         const promptId = queueResponse?.prompt_id;
         if (promptId) {
           const promptIdString = String(promptId);
+          const nowIso = new Date().toISOString();
+          const projectContext = getCurrentProjectContext();
           localStorage.setItem('lastPromptId', promptIdString);
+          persistRunStartTime(promptIdString, nowIso);
           saveCozySession({
             id: promptIdString,
             status: 'queued',
             workflow: selectedWorkflow,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
+            project_id: projectContext.projectId,
+            project_name: projectContext.projectName,
+            run_started_at: nowIso,
+            created_at: nowIso,
+            updated_at: nowIso,
           }).catch(() => {});
           appendHistoryEntry({
             id: promptIdString,
-            timestamp: new Date().toISOString(),
+            project_id: projectContext.projectId,
+            project_name: projectContext.projectName,
+            timestamp: nowIso,
+            started_at: nowIso,
             json: promptPayload,
             fields: {
+              project_id: projectContext.projectId,
+              project_name: projectContext.projectName,
+              started_at: nowIso,
               formData: updatedFormData,
               randomizeState,
               bypassedState,
@@ -1703,9 +1932,21 @@ function App() {
   const workflowNotes = getWorkflowNotes(workflowData);
   const workflowNoteOptions = workflowNotes.map((note) => ({ value: note.id, label: note.title }));
   const activeWorkflowNote = workflowNotes.find((note) => String(note.id) === String(selectedNoteId)) || null;
+  const activeProjectContext = getCurrentProjectContext();
 
   return (
     <div className="w-full">
+        <div className="mb-3 bg-base-200 shadow-lg rounded-lg p-3 flex flex-wrap items-center gap-2">
+            <span className="text-sm text-gray-400">Project:</span>
+            <span className="text-sm text-white font-semibold break-all">{activeProjectContext.projectName}</span>
+            <button
+              type="button"
+              className="btn btn-xs btn-outline ml-auto"
+              onClick={() => navigate('/')}
+            >
+              Back To Projects
+            </button>
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pb-28">
             {/* Right Column: Preview & Generate Button */}
             <div className="flex flex-col space-y-2">
@@ -1927,18 +2168,10 @@ function App() {
                     <button
                         onClick={handleGenerate}
                         disabled={isLoading || !workflowData}
-                        className="w-full disabled:w-1/2 bg-accent text-white font-bold text-lg py-4 px-4 rounded-lg hover:bg-accent-focus transition duration-300 disabled:bg-base-300 disabled:cursor-not-allowed shadow-lg"
+                        className="w-full bg-accent text-white font-bold text-lg py-4 px-4 rounded-lg hover:bg-accent-focus transition duration-300 disabled:bg-base-300 disabled:cursor-not-allowed shadow-lg"
                     >
                         {isLoading ? 'Generating...' : 'Generate'}
                     </button>
-                    {
-                        isLoading && <button 
-                            onClick={handleGenerate}
-                            disabled={!workflowData}
-                            class="w-1/2 bg-accent text-white font-bold text-lg py-4 px-4 rounded-lg hover:bg-accent-focus transition duration-300 disabled:bg-base-300 disabled:cursor-not-allowed shadow-lg">
-                                Add to Queue
-                        </button>
-                    }
                 </div>
                 {(isLoading && progressMax > 0) && (
                     <div className="w-full bg-base-300 rounded-full h-2.5 mt-2">

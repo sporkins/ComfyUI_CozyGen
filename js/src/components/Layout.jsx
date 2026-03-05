@@ -16,23 +16,23 @@ const Layout = () => {
                                 `px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-accent text-white' : 'text-gray-300 hover:bg-base-300'}`
                             }
                         >
+                            Projects
+                        </NavLink>
+                        <NavLink
+                            to="/generate"
+                            className={({ isActive }) =>
+                                `px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-accent text-white' : 'text-gray-300 hover:bg-base-300'}`
+                            }
+                        >
                             Generate
                         </NavLink>
-                        <NavLink 
-                            to="/gallery" 
-                            className={({ isActive }) => 
+                        <NavLink
+                            to="/gallery"
+                            className={({ isActive }) =>
                                 `px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-accent text-white' : 'text-gray-300 hover:bg-base-300'}`
                             }
                         >
                             Gallery
-                        </NavLink>
-                        <NavLink 
-                            to="/history" 
-                            className={({ isActive }) => 
-                                `px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-accent text-white' : 'text-gray-300 hover:bg-base-300'}`
-                            }
-                        >
-                            History
                         </NavLink>
                         <NavLink
                             to="/queue"

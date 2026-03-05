@@ -48,11 +48,19 @@
 - Never auto-import ComfyUI-executed runs into CozyGen history by default. Always keep ComfyUI-run ingestion explicit/opt-in because backfill surprises users and creates phantom history entries after cache resets.
 - Never trust ComfyUI history media bucket counts directly. Always dedupe by `(type, subfolder, filename)` because the same MP4 can appear in both `gifs` and `videos` buckets and double the preview count.
 - Never let temp previews block history fallback. Always filter `preview_images` to non-temp before deciding whether to fetch ComfyUI output media because temp-only saved previews hide final outputs.
+- Never treat non-temp `preview_images` as a complete run media list. Always merge previews with Comfy history outputs because previews can omit final videos or alternate outputs.
+- Never treat non-empty `preview_images` arrays as valid without sanitizing entries. Always filter to non-empty URL strings before deciding to skip backfill because `[null]` can block recovery and hide media.
 - Never rely on ComfyUI `/history` fallback for restart durability. Always persist `preview_images` before run end completes (or backfill from `/history` immediately) because ComfyUI history may be unavailable after restart.
+- Never let `session` hydration overwrite an already-selected active project context. Always preserve explicit project selection and only use session project data as a fallback because stale session metadata can mislabel new runs.
 - Never test or debug using the live CozyGen cache directory or running CozyGen instance data. Always ask the user to export/share sanitized debug data into this project first because cache/runtime data may contain sensitive content.
 - Never replace an existing configurable node when a simpler variant is requested. Always add a separate minimal node to avoid workflow regressions.
 - Never increase numeric UI precision without updating backend rounding/serialization too. Always keep them aligned because hidden truncation causes confusing value changes.
 - Never assume new CozyGen node classes appear in the web UI automatically. Always update MainPage type lists and widget/value mappings because the UI uses hardcoded class-type handling.
+- Never preserve legacy history/project compatibility when a greenfield reset is explicitly requested. Always build against the new model directly because migration logic adds avoidable complexity and conflicts with scope.
+- Never key cross-device project run visibility by local-only project IDs alone. Always include a stable/shared fallback (like normalized project name or canonical ID) because localStorage-generated IDs differ per device.
+- Never treat project workflow/preset defaults as a substitute for project field defaults. Always persist and restore form/toggle state per project+workflow because users expect project-specific generate values.
+- Never reference a `const` callback in hook dependency arrays before it is initialized in component order. Always declare shared callbacks before dependent hooks because TDZ errors can blank the page at render time.
+- Never leave core nav order ambiguous when users specify workflow priority. Always place primary tabs in the requested order because it sets expected navigation muscle memory.
 - Never let polling timers close over mutable UI settings/state. Always read live values from refs or refreshed callbacks because stale closures make controls appear broken.
 - Never add a workflow node for a feature that is global UI state by nature. Always prefer backend/UI-only implementation first because it avoids execution-graph friction and user confusion.
 - Never rely on small native mobile number steppers for important controls. Always provide explicit +/- buttons because touch targets and browser UI vary too much.
@@ -65,6 +73,8 @@
 - Never rely on virtual-node properties to persist in Cozy workflow exports. Always serialize derived control metadata into node `inputs` because Cozy stores prompt-style JSON.
 - Never apply rgthree bypass UI state by deleting targeted workflow nodes. Always set Comfy `mode` (`ALWAYS`/`BYPASS`/`NEVER`) because removing nodes can break non-input graph branches.
 - Never overload a path-based preview node to support tensor media directly. Always add a dedicated output node for `IMAGES`/`LATENT` inputs because it keeps I/O contracts explicit and avoids brittle mixed parsing logic.
+- Never leave active routes or nav links pointing to missing page files. Always keep router imports and page files in sync because missing targets cause blank-screen navigation failures.
+- Never implement user-visible soft-delete semantics with browser-only storage. Always persist deletable entities in backend filesystem-backed storage because users need manual file-level recovery paths.
 
 ## PROJECT-SPECIFIC (add as needed)
 

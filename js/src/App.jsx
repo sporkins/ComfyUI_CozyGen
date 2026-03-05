@@ -1,6 +1,7 @@
 import React from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
+import ProjectsPage from './pages/ProjectsPage';
 import MainPage from './pages/MainPage';
 import Gallery from './pages/Gallery';
 import HistoryTab from './components/HistoryTab';
@@ -13,7 +14,8 @@ function App() {
         <HashRouter>
             <Routes>
                 <Route path="/" element={<Layout />}>
-                    <Route index element={<MainPage />} />
+                    <Route index element={<ProjectsPage />} />
+                    <Route path="generate" element={<MainPage />} />
                     <Route path="gallery" element={<Gallery />} />
                     <Route path="history" element={<HistoryTab />} />
                     <Route path="history/:historyId" element={<HistoryDetail />} />

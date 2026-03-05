@@ -8,6 +8,7 @@ from PIL import Image, ImageOps
 import server # Import server for node_info
 import uuid # For generating unique filenames
 import re
+from datetime import datetime, timezone
 from .log_capture import (
     ensure_log_capture_started,
     get_log_entries,
@@ -155,6 +156,115 @@ def write_presets(data: dict):
     path = get_presets_path()
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data if isinstance(data, dict) else {}, f, indent=2)
+
+def now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def get_projects_root_dir() -> str:
+    projects_dir = os.path.join(get_cache_dir(), "projects")
+    active_dir = os.path.join(projects_dir, "active")
+    deleted_dir = os.path.join(projects_dir, "deleted")
+    os.makedirs(active_dir, exist_ok=True)
+    os.makedirs(deleted_dir, exist_ok=True)
+    return projects_dir
+
+def get_active_projects_dir() -> str:
+    return os.path.join(get_projects_root_dir(), "active")
+
+def get_deleted_projects_dir() -> str:
+    return os.path.join(get_projects_root_dir(), "deleted")
+
+def sanitize_project_id(project_id: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9._-]', '_', str(project_id or ''))
+
+def project_path_for_id(project_id: str, *, deleted: bool = False) -> str:
+    safe_id = sanitize_project_id(project_id)
+    base_dir = get_deleted_projects_dir() if deleted else get_active_projects_dir()
+    return os.path.join(base_dir, f"{safe_id}.json")
+
+def load_project_entry(project_id: str, *, deleted: bool = False):
+    path = project_path_for_id(project_id, deleted=deleted)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+def write_project_entry(project_id: str, data: dict):
+    path = project_path_for_id(project_id, deleted=False)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data if isinstance(data, dict) else {}, f, indent=2)
+
+def list_project_entries():
+    active_dir = get_active_projects_dir()
+    entries = []
+    for name in os.listdir(active_dir):
+        if not name.endswith('.json'):
+            continue
+        path = os.path.join(active_dir, name)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                continue
+            if not data.get("id"):
+                data["id"] = os.path.splitext(name)[0]
+            entries.append(data)
+        except Exception:
+            continue
+
+    entries.sort(
+        key=lambda item: (
+            str(item.get("created_at", "")),
+            str(item.get("id", "")),
+        )
+    )
+    return entries
+
+def sanitize_project_payload(payload: dict):
+    if not isinstance(payload, dict):
+        return None
+
+    project_id = str(payload.get("id", "")).strip()
+    if not project_id:
+        return None
+
+    merged = dict(payload)
+    merged["id"] = project_id
+    merged["name"] = str(payload.get("name", "")).strip() or "Untitled Project"
+    merged["pinned"] = bool(payload.get("pinned", False))
+
+    raw_tags = payload.get("tags", [])
+    if isinstance(raw_tags, list):
+        merged["tags"] = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
+    else:
+        merged["tags"] = []
+
+    merged["defaultWorkflow"] = str(payload.get("defaultWorkflow", "")).strip()
+
+    raw_defaults = payload.get("workflowPresetDefaults", {})
+    if isinstance(raw_defaults, dict):
+        merged["workflowPresetDefaults"] = {
+            str(workflow_name).strip(): str(preset_name).strip()
+            for workflow_name, preset_name in raw_defaults.items()
+            if str(workflow_name).strip() and str(preset_name).strip()
+        }
+    else:
+        merged["workflowPresetDefaults"] = {}
+
+    return merged
+
+def move_project_to_deleted(project_id: str) -> str | None:
+    source_path = project_path_for_id(project_id, deleted=False)
+    if not os.path.exists(source_path):
+        return None
+
+    target_path = project_path_for_id(project_id, deleted=True)
+    os.replace(source_path, target_path)
+    return target_path
 
 @functools.lru_cache(maxsize=256)
 def build_thumbnail_bytes(path: str, mtime: float, size: int, width: int, quality: int, fmt: str):
@@ -487,6 +597,56 @@ async def save_presets(request: web.Request) -> web.Response:
     write_presets(sanitized_items)
     return web.json_response({"status": "ok", "items": sanitized_items})
 
+async def get_projects(request: web.Request) -> web.Response:
+    items = list_project_entries()
+    return web.json_response({"items": items})
+
+async def save_project(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    if not isinstance(payload, dict):
+        return web.json_response({"error": "Invalid project payload"}, status=400)
+
+    project_payload = payload.get("item", payload)
+    project = sanitize_project_payload(project_payload)
+    if not project:
+        return web.json_response({"error": "Missing or invalid project id"}, status=400)
+
+    existing = load_project_entry(project["id"]) or {}
+    merged = {**existing, **project}
+    if not merged.get("created_at"):
+        merged["created_at"] = now_utc_iso()
+    merged["updated_at"] = now_utc_iso()
+
+    write_project_entry(merged["id"], merged)
+    return web.json_response({"status": "ok", "item": merged})
+
+async def delete_project(request: web.Request) -> web.Response:
+    project_id = request.match_info.get("project_id", "")
+    if not project_id:
+        return web.json_response({"error": "Missing project id"}, status=400)
+
+    existing = load_project_entry(project_id)
+    if not existing:
+        return web.json_response({"error": "Project not found"}, status=404)
+
+    existing["deleted_at"] = now_utc_iso()
+    existing["updated_at"] = now_utc_iso()
+    write_project_entry(project_id, existing)
+    deleted_path = move_project_to_deleted(project_id)
+    if not deleted_path:
+        return web.json_response({"error": "Failed to move project to deleted folder"}, status=500)
+
+    return web.json_response({
+        "status": "ok",
+        "id": str(existing.get("id") or project_id),
+        "deleted_path": deleted_path,
+        "restore_hint": "Move the project JSON file from '.cache/projects/deleted' back to '.cache/projects/active'.",
+    })
+
 
 async def get_logs(request: web.Request) -> web.Response:
     after_id_param = request.rel_url.query.get("after_id")
@@ -676,6 +836,9 @@ routes = [
     web.post('/cozygen/session', save_session),
     web.get('/cozygen/presets', get_presets),
     web.post('/cozygen/presets', save_presets),
+    web.get('/cozygen/projects', get_projects),
+    web.post('/cozygen/projects', save_project),
+    web.post('/cozygen/projects/{project_id}/delete', delete_project),
     web.post('/cozygen/upload_image', upload_image),
     web.get('/cozygen/workflows', get_workflow_list),
     web.get('/cozygen/workflows/{filename}', get_workflow_file),

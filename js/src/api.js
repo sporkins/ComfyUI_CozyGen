@@ -206,6 +206,38 @@ export const saveCozyPresets = async (items) => {
   return response.json();
 };
 
+export const getCozyProjects = async () => {
+  const response = await fetch(`${BASE_URL}/projects`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch CozyGen projects');
+  }
+  return response.json();
+};
+
+export const saveCozyProject = async (item) => {
+  const response = await fetch(`${BASE_URL}/projects`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ item }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to save CozyGen project');
+  }
+  return response.json();
+};
+
+export const deleteCozyProject = async (projectId) => {
+  const response = await fetch(`${BASE_URL}/projects/${encodeURIComponent(String(projectId || ''))}/delete`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete CozyGen project: ${projectId}`);
+  }
+  return response.json();
+};
+
 export const getViewUrl = (filename, subfolder = '', type = 'output', options = {}) => {
   const baseUrl = window.location.protocol + '//' + window.location.host;
   const params = new URLSearchParams({

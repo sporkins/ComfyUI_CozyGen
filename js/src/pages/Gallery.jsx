@@ -1,412 +1,621 @@
-import React, { useState, useEffect } from 'react';
-import { getGallery } from '../api';
-import GalleryItem from '../components/GalleryItem';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  getCozyHistoryList,
+  getCozyMediaUrl,
+  getHistory,
+  getThumbUrl,
+  parseMediaRefFromUrl,
+} from '../api';
+import LazyMedia from '../components/LazyMedia';
 import SearchableSelect from '../components/SearchableSelect';
-import MediaComparePanel from '../components/MediaComparePanel';
-import Modal from 'react-modal'; // Using react-modal for accessibility
-import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
+import { extractHistoryMedia, getHistoryWorkflowName, isGifUrl, isVideoUrl } from '../utils/historyUtils';
+import { PROJECTS_STATE_KEY, readJsonStorage, setActiveProjectContext } from '../utils/projectUtils';
 
-// Modal styles
-const customStyles = {
-  content: {
-    position: 'relative',
-    top: 'auto',
-    left: 'auto',
-    right: 'auto',
-    bottom: 'auto',
-    transform: 'none',
-    marginRight: '0',
-    backgroundColor: '#2D3748',
-    border: 'none',
-    borderRadius: '8px',
-    padding: '0rem',
-    maxHeight: '90vh',
-    width: '90vw',
-    maxWidth: '864px',
-    overflow: 'auto',
-    flexShrink: 0,
-  },
-  overlay: {
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
-  }
-};
+const HISTORY_SELECTION_KEY = 'historySelection';
+const PROJECT_FILTER_ALL = '__all__';
+const PROJECT_FILTER_UNASSIGNED = '__unassigned__';
+const TYPE_FILTER_ALL = 'all';
+const SORT_DATE_DESC = 'date_desc';
+const SORT_DATE_ASC = 'date_asc';
+const THUMB_OPTIONS = { w: 360, q: 55, fmt: 'webp' };
 
-Modal.setAppElement('#root');
-
-const isVideo = (filename) => /\.(mp4|webm)$/i.test(filename);
-const isAudio = (filename) => /\.(mp3|wav|flac)$/i.test(filename);
-const getGalleryItemKey = (item) => `${item?.subfolder || ''}::${item?.filename || ''}`;
-const getComparableMediaType = (item) => {
-    if (!item || item.type === 'directory') return null;
-    if (isAudio(item.filename)) return null;
-    return isVideo(item.filename) ? 'video' : 'image';
-};
-const FILE_TYPE_FILTER_OPTIONS = [
-    { value: 'all', label: 'All Files' },
-    { value: 'image', label: 'Images' },
-    { value: 'video', label: 'Videos' },
-    { value: 'audio', label: 'Audio' },
+const TYPE_FILTER_OPTIONS = [
+  { value: TYPE_FILTER_ALL, label: 'Type: All' },
+  { value: 'image', label: 'Type: Image' },
+  { value: 'video', label: 'Type: Video' },
+  { value: 'gif', label: 'Type: GIF' },
+  { value: 'audio', label: 'Type: Audio' },
+  { value: 'other', label: 'Type: Other' },
 ];
+
 const SORT_OPTIONS = [
-    { value: 'date_desc', label: 'Date: Newest first' },
-    { value: 'date_asc', label: 'Date: Oldest first' },
+  { value: SORT_DATE_DESC, label: 'Date: Newest first' },
+  { value: SORT_DATE_ASC, label: 'Date: Oldest first' },
 ];
+
+const isTempPreview = (url) => String(parseMediaRefFromUrl(url)?.type || '') === 'temp';
+
+const projectIdFor = (run) => String(run?.project_id || run?.fields?.project_id || '').trim();
+const projectNameFor = (run) => String(run?.project_name || run?.fields?.project_name || '').trim();
+const isFavoriteRun = (run) => Boolean(run?.favorite || run?.fields?.favorite);
+
+const parseTimestampMs = (run) => {
+  const value = run?.timestamp || run?.finished_at || run?.started_at || run?.fields?.finished_at || run?.fields?.started_at || '';
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatTimestamp = (valueMs) => (valueMs > 0 ? new Date(valueMs).toLocaleString() : 'Unknown time');
+
+const formatRuntime = (run) => {
+  const direct = Number(run?.runtime_ms ?? run?.fields?.runtime_ms);
+  if (Number.isFinite(direct) && direct > 0) return `${(direct / 1000).toFixed(1)}s`;
+  const startMs = new Date(run?.started_at || run?.fields?.started_at || '').getTime();
+  const endMs = new Date(run?.finished_at || run?.fields?.finished_at || run?.timestamp || '').getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return 'n/a';
+  return `${((endMs - startMs) / 1000).toFixed(1)}s`;
+};
+
+const mediaTypeFromFilename = (filename) => {
+  const value = String(filename || '');
+  if (isVideoUrl(value)) return 'video';
+  if (isGifUrl(value)) return 'gif';
+  if (/\.(png|jpe?g|webp|bmp|tiff?)$/i.test(value)) return 'image';
+  if (/\.(mp3|wav|flac|m4a|ogg|aac)$/i.test(value)) return 'audio';
+  return 'other';
+};
+
+const readSavedProjectNames = () => {
+  const state = readJsonStorage(PROJECTS_STATE_KEY, null);
+  const projects = Array.isArray(state?.projects) ? state.projects : [];
+  return Object.fromEntries(
+    projects
+      .map((project) => {
+        const id = String(project?.id || '').trim();
+        const name = String(project?.name || '').trim();
+        return [id, name];
+      })
+      .filter(([id, name]) => Boolean(id && name))
+  );
+};
+
+const projectMetaForRun = (run, savedProjectNames) => {
+  const projectId = projectIdFor(run);
+  const projectName = savedProjectNames[projectId] || projectNameFor(run) || '';
+  if (projectId) {
+    return {
+      projectId,
+      projectName,
+      projectLabel: projectName || projectId,
+      projectFilterKey: `id:${projectId}`,
+    };
+  }
+  if (projectName) {
+    return {
+      projectId: '',
+      projectName,
+      projectLabel: projectName,
+      projectFilterKey: `name:${projectName.toLowerCase()}`,
+    };
+  }
+  return {
+    projectId: '',
+    projectName: '',
+    projectLabel: 'Unassigned',
+    projectFilterKey: '',
+  };
+};
+
+const buildMediaForRun = (run, historyEntry) => {
+  const merged = [];
+  const seen = new Set();
+
+  const pushRef = (entry) => {
+    if (!entry?.filename) return;
+    const normalized = {
+      filename: String(entry.filename),
+      subfolder: String(entry.subfolder || ''),
+      type: String(entry.type || 'output'),
+    };
+    if (normalized.type === 'temp') return;
+    const key = `${normalized.type}::${normalized.subfolder}::${normalized.filename}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push({ ...normalized, key });
+  };
+
+  const previewUrls = Array.isArray(run?.preview_images) ? run.preview_images : [];
+  previewUrls
+    .filter((url) => !isTempPreview(url))
+    .forEach((url) => {
+      const parsed = parseMediaRefFromUrl(url);
+      if (parsed) pushRef(parsed);
+    });
+
+  extractHistoryMedia(historyEntry).forEach((entry) => pushRef(entry));
+
+  const lastIndexByType = {};
+  merged.forEach((entry, index) => {
+    const mediaType = mediaTypeFromFilename(entry.filename);
+    lastIndexByType[mediaType] = index;
+  });
+
+  return merged.map((entry, index) => {
+    const mediaType = mediaTypeFromFilename(entry.filename);
+    return {
+      ...entry,
+      mediaType,
+      sequenceIndex: index,
+      isFinalForType: lastIndexByType[mediaType] === index,
+      fullUrl: getCozyMediaUrl(entry.filename, entry.subfolder, entry.type),
+      thumbUrl: mediaType === 'image'
+        ? getThumbUrl(entry.filename, entry.subfolder, entry.type, THUMB_OPTIONS)
+        : null,
+    };
+  });
+};
+
+const MediaPreview = ({ item }) => {
+  if (!item) return null;
+  if (item.mediaType === 'video') {
+    return <LazyMedia type="video" src={item.fullUrl} className="w-full h-full object-cover" rootMargin="300px" />;
+  }
+  if (item.mediaType === 'audio') {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-base-300/50 text-gray-300 text-xs px-2 text-center">
+        Audio file
+      </div>
+    );
+  }
+  if (item.mediaType === 'gif') {
+    return (
+      <LazyMedia
+        type="image"
+        src={item.fullUrl}
+        fallbackSrc={item.fullUrl}
+        alt={item.filename}
+        className="w-full h-full object-cover"
+        rootMargin="300px"
+      />
+    );
+  }
+  return (
+    <LazyMedia
+      type="image"
+      src={item.thumbUrl || item.fullUrl}
+      fallbackSrc={item.fullUrl}
+      alt={item.filename}
+      className="w-full h-full object-cover"
+      rootMargin="300px"
+    />
+  );
+};
 
 const Gallery = () => {
-    const [items, setItems] = useState([]);
-    const [path, setPath] = useState(localStorage.getItem('galleryPath') || '');
-    const [modalIsOpen, setModalIsOpen] = useState(false);
-    const [selectedItem, setSelectedItem] = useState(null);
-    const [page, setPage] = useState(1);
-    const [totalPages, setTotalPages] = useState(1);
-    const [pageSize, setPageSize] = useState(parseInt(localStorage.getItem('galleryPageSize'), 10) || 20);
-    const [fileTypeFilter, setFileTypeFilter] = useState(localStorage.getItem('galleryFileTypeFilter') || 'all');
-    const [sortOrder, setSortOrder] = useState(localStorage.getItem('gallerySortOrder') || 'date_desc');
-    const [compareSelection, setCompareSelection] = useState([]);
-    const [compareNotice, setCompareNotice] = useState('');
+  const navigate = useNavigate();
+  const [historyItems, setHistoryItems] = useState([]);
+  const [historyOutputs, setHistoryOutputs] = useState({});
+  const [loadingRuns, setLoadingRuns] = useState(true);
+  const [loadingOutputs, setLoadingOutputs] = useState(false);
+  const [outputProgress, setOutputProgress] = useState({ loaded: 0, total: 0 });
+  const [errorText, setErrorText] = useState('');
+  const [projectFilter, setProjectFilter] = useState(PROJECT_FILTER_ALL);
+  const [typeFilter, setTypeFilter] = useState(TYPE_FILTER_ALL);
+  const [sortOrder, setSortOrder] = useState(SORT_DATE_DESC);
+  const [searchText, setSearchText] = useState('');
+  const [finalOnly, setFinalOnly] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [selectedMedia, setSelectedMedia] = useState(null);
+  const [savedProjectNames] = useState(() => readSavedProjectNames());
 
-    useEffect(() => {
-        const fetchGallery = async () => {
+  useEffect(() => {
+    let cancelled = false;
+    const loadHistoryList = async () => {
+      setLoadingRuns(true);
+      setErrorText('');
+      try {
+        const data = await getCozyHistoryList();
+        if (cancelled) return;
+        setHistoryItems(Array.isArray(data?.items) ? data.items : []);
+      } catch (error) {
+        if (cancelled) return;
+        console.warn('CozyGen: failed to load history for gallery', error);
+        setHistoryItems([]);
+        setErrorText('Failed to load runs.');
+      } finally {
+        if (!cancelled) setLoadingRuns(false);
+      }
+    };
+    loadHistoryList();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (historyItems.length === 0) {
+      setHistoryOutputs({});
+      setLoadingOutputs(false);
+      setOutputProgress({ loaded: 0, total: 0 });
+      return;
+    }
+
+    let cancelled = false;
+    const loadRunOutputs = async () => {
+      setHistoryOutputs({});
+      setLoadingOutputs(true);
+      setOutputProgress({ loaded: 0, total: historyItems.length });
+
+      const chunkSize = 8;
+      for (let offset = 0; offset < historyItems.length; offset += chunkSize) {
+        if (cancelled) return;
+        const chunk = historyItems.slice(offset, offset + chunkSize);
+        const results = await Promise.all(
+          chunk.map(async (item) => {
+            const runId = String(item?.id || '');
+            if (!runId) return [runId, null];
             try {
-                const galleryData = await getGallery(path, page, pageSize, {
-                    fileType: fileTypeFilter,
-                    sort: sortOrder,
-                });
-                if (galleryData && galleryData.items) {
-                    setItems(galleryData.items);
-                    setTotalPages(galleryData.total_pages);
-                } else {
-                    setItems([]);
-                    setTotalPages(1);
-                }
-            } catch (error) {
-                console.error(error);
-                setItems([]);
-                setTotalPages(1);
+              const data = await getHistory(runId);
+              const entry = data?.[runId] || data?.history?.[runId] || null;
+              return [runId, entry];
+            } catch {
+              return [runId, null];
             }
-        };
-        fetchGallery();
-        localStorage.setItem('galleryPath', path);
-        localStorage.setItem('galleryFileTypeFilter', fileTypeFilter);
-        localStorage.setItem('gallerySortOrder', sortOrder);
-    }, [path, page, pageSize, fileTypeFilter, sortOrder]);
+          })
+        );
+        if (cancelled) return;
 
-    const handleSelect = (item) => {
-        if (item.type === 'directory') {
-            setCompareSelection([]);
-            setCompareNotice('');
-            setPath(item.subfolder);
-            setPage(1);
-        } else {
-            setSelectedItem(item);
-            setModalIsOpen(true);
+        const nextEntries = {};
+        results.forEach(([runId, entry]) => {
+          if (runId && entry) {
+            nextEntries[runId] = entry;
+          }
+        });
+        if (Object.keys(nextEntries).length > 0) {
+          setHistoryOutputs((prev) => ({ ...prev, ...nextEntries }));
         }
+        setOutputProgress((prev) => ({
+          ...prev,
+          loaded: Math.min(historyItems.length, offset + chunk.length),
+        }));
+      }
+
+      if (!cancelled) setLoadingOutputs(false);
     };
 
-    const clearCompare = () => {
-        setCompareSelection([]);
-        setCompareNotice('');
-    };
+    loadRunOutputs();
+    return () => { cancelled = true; };
+  }, [historyItems]);
 
-    const toggleCompareSelection = (item) => {
-        const itemMediaType = getComparableMediaType(item);
-        if (!itemMediaType) {
-            return;
-        }
-        const itemKey = getGalleryItemKey(item);
-        const isAlreadySelected = compareSelection.some((selected) => getGalleryItemKey(selected) === itemKey);
-        if (isAlreadySelected) {
-            setCompareSelection(compareSelection.filter((selected) => getGalleryItemKey(selected) !== itemKey));
-            setCompareNotice('');
-            return;
-        }
+  const mediaItems = useMemo(() => {
+    return historyItems.flatMap((run) => {
+      const runId = String(run?.id || '');
+      if (!runId) return [];
+      const runTimestampMs = parseTimestampMs(run);
+      const workflowName = getHistoryWorkflowName(run) || 'Unknown workflow';
+      const runtimeText = formatRuntime(run);
+      const projectMeta = projectMetaForRun(run, savedProjectNames);
+      const runMedia = buildMediaForRun(run, historyOutputs[runId]);
+      return runMedia.map((media) => ({
+        id: `${runId}::${media.key}`,
+        runId,
+        runTimestampMs,
+        timestampLabel: formatTimestamp(runTimestampMs),
+        workflowName,
+        runtimeText,
+        favorite: isFavoriteRun(run),
+        projectId: projectMeta.projectId,
+        projectName: projectMeta.projectName,
+        projectLabel: projectMeta.projectLabel,
+        projectFilterKey: projectMeta.projectFilterKey,
+        mediaType: media.mediaType,
+        sequenceIndex: media.sequenceIndex,
+        isFinalForType: media.isFinalForType,
+        filename: media.filename,
+        subfolder: media.subfolder,
+        fullUrl: media.fullUrl,
+        thumbUrl: media.thumbUrl,
+        run,
+      }));
+    });
+  }, [historyItems, historyOutputs, savedProjectNames]);
 
-        if (compareSelection.length > 0) {
-            const existingType = getComparableMediaType(compareSelection[0]);
-            if (existingType && existingType !== itemMediaType) {
-                setCompareNotice(`Compare only supports ${existingType} to ${existingType}.`);
-                return;
-            }
-        }
+  const projectFilterOptions = useMemo(() => {
+    const optionsByKey = new Map();
+    mediaItems.forEach((item) => {
+      if (!item.projectFilterKey) return;
+      if (optionsByKey.has(item.projectFilterKey)) return;
+      optionsByKey.set(item.projectFilterKey, {
+        value: item.projectFilterKey,
+        label: item.projectLabel,
+      });
+    });
+    const sorted = [...optionsByKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+    return [
+      { value: PROJECT_FILTER_ALL, label: 'Project: All' },
+      ...sorted,
+      { value: PROJECT_FILTER_UNASSIGNED, label: 'Project: Unassigned' },
+    ];
+  }, [mediaItems]);
 
-        if (compareSelection.length >= 2) {
-            return;
-        }
+  const visibleItems = useMemo(() => {
+    const needle = searchText.trim().toLowerCase();
 
-        setCompareSelection([...compareSelection, item]);
-        setCompareNotice('');
-    };
+    const filtered = mediaItems.filter((item) => {
+      if (projectFilter === PROJECT_FILTER_UNASSIGNED && item.projectFilterKey) return false;
+      if (projectFilter !== PROJECT_FILTER_ALL && projectFilter !== PROJECT_FILTER_UNASSIGNED) {
+        if (item.projectFilterKey !== projectFilter) return false;
+      }
+      if (typeFilter !== TYPE_FILTER_ALL && item.mediaType !== typeFilter) return false;
+      if (finalOnly && !item.isFinalForType) return false;
+      if (favoritesOnly && !item.favorite) return false;
 
-    const handlePageSizeChange = (nextValue) => {
-        const newSize = parseInt(nextValue, 10);
-        clearCompare();
-        setPageSize(newSize);
-        setPage(1); // Reset to first page when page size changes
-        localStorage.setItem('galleryPageSize', newSize);
-    };
+      if (!needle) return true;
+      const haystack = `${item.filename} ${item.projectLabel} ${item.workflowName} ${item.runId}`.toLowerCase();
+      return haystack.includes(needle);
+    });
 
-    const handleFileTypeFilterChange = (nextValue) => {
-        clearCompare();
-        setFileTypeFilter(nextValue);
-        setPage(1);
-    };
+    filtered.sort((a, b) => {
+      const tsDiff = a.runTimestampMs - b.runTimestampMs;
+      if (tsDiff !== 0) {
+        return sortOrder === SORT_DATE_DESC ? -tsDiff : tsDiff;
+      }
+      if (a.runId === b.runId) {
+        return sortOrder === SORT_DATE_DESC
+          ? b.sequenceIndex - a.sequenceIndex
+          : a.sequenceIndex - b.sequenceIndex;
+      }
+      return a.runId.localeCompare(b.runId);
+    });
 
-    const handleSortOrderChange = (nextValue) => {
-        clearCompare();
-        setSortOrder(nextValue);
-        setPage(1);
-    };
+    return filtered;
+  }, [favoritesOnly, finalOnly, mediaItems, projectFilter, searchText, sortOrder, typeFilter]);
 
-    const handleBreadcrumbClick = (index) => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        const pathSegments = normalizedPath.split('/').filter(Boolean);
-        const newPath = pathSegments.slice(0, index).join('/');
-        clearCompare();
-        setPath(newPath);
-        setPage(1);
-    };
+  const visibleRunCount = useMemo(
+    () => new Set(visibleItems.map((item) => item.runId)).size,
+    [visibleItems]
+  );
 
-    const handleFolderUp = () => {
-        const normalizedPath = path.replace(/\\/g, '/');
-        const pathSegments = normalizedPath.split('/').filter(Boolean);
-        clearCompare();
-        if (pathSegments.length > 0) {
-            const newPath = pathSegments.slice(0, -1).join('/');
-            setPath(newPath);
-        } else {
-            setPath(''); // Already at root, ensure path is empty
-        }
-        setPage(1);
-    };
+  const handleLoadRun = (item) => {
+    if (!item?.run?.json) {
+      window.alert('This run does not include a saved workflow payload.');
+      return;
+    }
+    try {
+      localStorage.setItem(HISTORY_SELECTION_KEY, JSON.stringify(item.run));
+    } catch {
+      window.alert('Failed to prepare run settings for Generate.');
+      return;
+    }
 
-    const isItemSelectedForCompare = (item) => compareSelection.some(
-        (selected) => getGalleryItemKey(selected) === getGalleryItemKey(item)
-    );
+    if (item.projectId) {
+      setActiveProjectContext({
+        projectId: item.projectId,
+        projectName: item.projectName,
+      });
+    }
+    navigate('/generate');
+  };
 
-    const getCompareButtonDisabled = (item) => {
-        const itemType = getComparableMediaType(item);
-        if (!itemType) return true;
-        if (isItemSelectedForCompare(item)) return false;
-        if (compareSelection.length >= 2) return true;
-        if (compareSelection.length === 0) return false;
-        return getComparableMediaType(compareSelection[0]) !== itemType;
-    };
+  const openRunDetails = (item) => {
+    navigate(`/history/${encodeURIComponent(item.runId)}`, {
+      state: { historyItem: item.run },
+    });
+  };
 
-    const handleNext = () => {
-        const mediaItems = items.filter(item => item.type !== 'directory');
-        if (mediaItems.length <= 1) return;
-        const currentIndex = mediaItems.findIndex(item => item.filename === selectedItem.filename && item.subfolder === selectedItem.subfolder);
-        const nextIndex = (currentIndex + 1) % mediaItems.length;
-        setSelectedItem(mediaItems[nextIndex]);
-    };
-
-    const handlePrevious = () => {
-        const mediaItems = items.filter(item => item.type !== 'directory');
-        if (mediaItems.length <= 1) return;
-        const currentIndex = mediaItems.findIndex(item => item.filename === selectedItem.filename && item.subfolder === selectedItem.subfolder);
-        const prevIndex = (currentIndex - 1 + mediaItems.length) % mediaItems.length;
-        setSelectedItem(mediaItems[prevIndex]);
-    };
-
-    const renderModalContent = () => {
-        if (!selectedItem) return null;
-
-        const fileUrl = `/view?filename=${selectedItem.filename}&subfolder=${selectedItem.subfolder}&type=output`;
-
-        if (isVideo(selectedItem.filename)) {
-            return <video src={fileUrl} controls autoPlay loop className="max-w-full max-h-full object-contain rounded-lg" />;
-        } else if (isAudio(selectedItem.filename)) {
-            return <audio src={fileUrl} controls autoPlay loop className="w-full" />;
-        } else {
-            return (
-                <TransformWrapper
-                    initialScale={1}
-                    minScale={0.5}
-                    maxScale={5}
-                    limitToBounds={false}
-                    doubleClick={{ disabled: true }}
-                    wheel={true}
-                >
-                    <TransformComponent>
-                        <img src={fileUrl} alt={selectedItem.filename} className="max-w-full max-h-full object-contain rounded-lg" />
-                    </TransformComponent>
-                </TransformWrapper>
-            );
-        }
-    };
-
-    const breadcrumbs = path.split(/[\/]/).filter(Boolean); // Handle both windows and unix paths
-    const comparedItems = compareSelection.length === 2 ? compareSelection : [];
-
-    return (
-        <div className="p-4">
-            <div className="mb-4 bg-base-200 rounded-lg p-2 flex items-center text-lg">
-                <span onClick={() => { clearCompare(); setPath(''); setPage(1); }} className="cursor-pointer hover:text-accent transition-colors">Gallery</span>
-                {breadcrumbs.map((segment, index) => (
-                    <React.Fragment key={index}>
-                        <span className="mx-2 text-gray-500">/</span>
-                        <span onClick={() => handleBreadcrumbClick(index + 1)} className="cursor-pointer hover:text-accent transition-colors">{segment}</span>
-                    </React.Fragment>
-                ))}
-                {/* Folder Up Button */}
-                <button
-                    onClick={handleFolderUp}
-                    disabled={path === ''} // Disable if at root
-                    className="ml-auto px-3 py-1 bg-base-300 text-gray-300 rounded-md text-sm hover:bg-base-300/70 transition-colors flex items-center"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18" />
-                    </svg>
-                    Up
-                </button>
-            </div>
-
-            <div className="flex flex-wrap justify-center items-center gap-3 mb-4">
-                <button
-                    onClick={() => {
-                        clearCompare();
-                        setPage(page > 1 ? page - 1 : 1);
-                    }}
-                    disabled={page <= 1}
-                    className="px-4 py-2 bg-base-300 text-white rounded-md disabled:opacity-50"
-                >
-                    Previous
-                </button>
-                <span>
-                    Page {page} of {totalPages}
-                </span>
-                <button
-                    onClick={() => {
-                        clearCompare();
-                        setPage(page < totalPages ? page + 1 : totalPages);
-                    }}
-                    disabled={page >= totalPages}
-                    className="px-4 py-2 bg-base-300 text-white rounded-md disabled:opacity-50"
-                >
-                    Next
-                </button>
-                <div className="flex items-center gap-2">
-                    <label htmlFor="gallery-file-type-filter" className="text-sm whitespace-nowrap">Type:</label>
-                    <SearchableSelect
-                        id="gallery-file-type-filter"
-                        className="w-40 sm:w-48"
-                        buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
-                        value={fileTypeFilter}
-                        onChange={handleFileTypeFilterChange}
-                        options={FILE_TYPE_FILTER_OPTIONS}
-                        listMaxHeightClassName="max-h-48"
-                    />
-                </div>
-                <div className="flex items-center gap-2">
-                    <label htmlFor="gallery-sort-order" className="text-sm whitespace-nowrap">Sort:</label>
-                    <SearchableSelect
-                        id="gallery-sort-order"
-                        className="w-44 sm:w-56"
-                        buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
-                        value={sortOrder}
-                        onChange={handleSortOrderChange}
-                        options={SORT_OPTIONS}
-                        listMaxHeightClassName="max-h-48"
-                    />
-                </div>
-                <div className="flex items-center gap-2">
-                    <label htmlFor="page-size-selector" className="text-sm">Per Page:</label>
-                    <SearchableSelect
-                        id="page-size-selector"
-                        className="w-24"
-                        buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
-                        value={pageSize}
-                        onChange={handlePageSizeChange}
-                        options={[10, 20, 50, 100]}
-                        listMaxHeightClassName="max-h-40"
-                    />
-                </div>
-            </div>
-
-            <div className="mb-4 bg-base-200 rounded-lg p-3 flex flex-wrap items-center gap-2">
-                <span className="text-sm text-gray-400">Compare:</span>
-                <span className="text-sm text-white">{compareSelection.length}/2 selected</span>
-                {compareSelection.length > 0 && (
-                    <span className="text-xs text-gray-400">
-                        {getComparableMediaType(compareSelection[0]) === 'video' ? 'Video mode' : 'Image mode'}
-                    </span>
-                )}
-                <button
-                    type="button"
-                    onClick={clearCompare}
-                    disabled={compareSelection.length === 0}
-                    className="btn btn-xs btn-outline"
-                >
-                    Clear Compare
-                </button>
-                {compareNotice && (
-                    <span className="text-xs text-warning">{compareNotice}</span>
-                )}
-            </div>
-
-            {comparedItems.length === 2 && (
-                <div className="mb-4">
-                    <MediaComparePanel leftItem={comparedItems[0]} rightItem={comparedItems[1]} />
-                </div>
-            )}
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                {items.map(item => (
-                    <GalleryItem
-                        key={getGalleryItemKey(item)}
-                        item={item}
-                        onSelect={handleSelect}
-                        onToggleCompare={toggleCompareSelection}
-                        isSelectedForCompare={isItemSelectedForCompare(item)}
-                        compareButtonDisabled={getCompareButtonDisabled(item)}
-                    />
-                ))}
-            </div>
-
-            {selectedItem && (
-                <Modal
-                    isOpen={modalIsOpen}
-                    onRequestClose={() => setModalIsOpen(false)}
-                    style={customStyles}
-                    contentLabel="Image Preview"
-                >
-                    <div className="flex flex-col h-full w-full">
-                        <div className="flex-grow flex items-center justify-center min-h-0">
-                            {renderModalContent()}
-                        </div>
-                        <div className="flex-shrink-0 p-2 flex justify-center items-center space-x-4">
-                            <button
-                                onClick={handlePrevious}
-                                className="p-2 bg-base-300 text-gray-300 rounded-full hover:bg-base-300/70 transition-colors"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-                                </svg>
-                            </button>
-                            <button
-                                onClick={() => setModalIsOpen(false)}
-                                className="px-4 py-2 bg-accent text-white rounded-md hover:bg-accent-focus transition-colors"
-                            >
-                                Close
-                            </button>
-                            <button
-                                onClick={handleNext}
-                                className="p-2 bg-base-300 text-gray-300 rounded-full hover:bg-base-300/70 transition-colors"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                </Modal>
-            )}
+  return (
+    <div className="space-y-4 pb-8">
+      <div className="bg-base-200 shadow-lg rounded-lg p-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-lg font-semibold text-white">Gallery</h2>
+          <span className="text-xs text-gray-400 ml-auto">
+            {visibleItems.length} media items across {visibleRunCount} runs
+          </span>
         </div>
-    );
-}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <SearchableSelect
+            id="gallery-project-filter"
+            className="w-56 sm:w-72"
+            buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
+            value={projectFilter}
+            onChange={setProjectFilter}
+            options={projectFilterOptions}
+            listMaxHeightClassName="max-h-56"
+          />
+          <SearchableSelect
+            id="gallery-type-filter"
+            className="w-44 sm:w-52"
+            buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
+            value={typeFilter}
+            onChange={setTypeFilter}
+            options={TYPE_FILTER_OPTIONS}
+            listMaxHeightClassName="max-h-56"
+          />
+          <SearchableSelect
+            id="gallery-sort-order"
+            className="w-56 sm:w-64"
+            buttonClassName="select select-bordered select-sm bg-base-100 w-full text-left"
+            value={sortOrder}
+            onChange={setSortOrder}
+            options={SORT_OPTIONS}
+            listMaxHeightClassName="max-h-40"
+          />
+          <input
+            type="text"
+            className="input input-bordered input-sm w-full sm:w-72"
+            placeholder="Search filename, project, workflow, run id..."
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+          />
+          <button
+            type="button"
+            className={`btn btn-xs ${finalOnly ? 'btn-accent' : 'btn-outline'}`}
+            onClick={() => setFinalOnly((prev) => !prev)}
+          >
+            Final Only
+          </button>
+          <button
+            type="button"
+            className={`btn btn-xs ${favoritesOnly ? 'btn-accent' : 'btn-outline'}`}
+            onClick={() => setFavoritesOnly((prev) => !prev)}
+          >
+            Favorites Only
+          </button>
+          <button
+            type="button"
+            className="btn btn-xs btn-outline"
+            onClick={() => {
+              setProjectFilter(PROJECT_FILTER_ALL);
+              setTypeFilter(TYPE_FILTER_ALL);
+              setSortOrder(SORT_DATE_DESC);
+              setSearchText('');
+              setFinalOnly(false);
+              setFavoritesOnly(false);
+            }}
+          >
+            Reset
+          </button>
+        </div>
+
+        {(loadingRuns || loadingOutputs) && (
+          <p className="text-xs text-gray-400">
+            {loadingRuns
+              ? 'Loading runs...'
+              : `Loading run outputs ${outputProgress.loaded}/${outputProgress.total}...`}
+          </p>
+        )}
+      </div>
+
+      {errorText && (
+        <div className="bg-base-200 shadow-lg rounded-lg p-4 text-red-300">{errorText}</div>
+      )}
+
+      {!loadingRuns && mediaItems.length === 0 && (
+        <div className="bg-base-200 shadow-lg rounded-lg p-6 text-center text-gray-400">
+          No generated output found yet.
+        </div>
+      )}
+
+      {!loadingRuns && mediaItems.length > 0 && visibleItems.length === 0 && (
+        <div className="bg-base-200 shadow-lg rounded-lg p-6 text-center text-gray-400">
+          No media matches the current filters.
+        </div>
+      )}
+
+      {visibleItems.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+          {visibleItems.map((item) => (
+            <div key={item.id} className="bg-base-200 rounded-lg shadow-lg overflow-hidden border border-base-300/60">
+              <button
+                type="button"
+                className="relative w-full aspect-square bg-base-300"
+                onClick={() => setSelectedMedia(item)}
+              >
+                <MediaPreview item={item} />
+                <span className="absolute top-1 left-1 text-[10px] px-1.5 py-0.5 rounded bg-black/70 text-white uppercase">
+                  {item.mediaType}
+                </span>
+                {item.isFinalForType && (
+                  <span className="absolute top-1 right-1 text-[10px] px-1.5 py-0.5 rounded bg-accent/90 text-white">
+                    Final
+                  </span>
+                )}
+              </button>
+              <div className="p-2 space-y-1">
+                <p className="text-xs text-white truncate" title={item.filename}>{item.filename}</p>
+                <p className="text-[11px] text-gray-400 truncate" title={item.projectLabel}>
+                  {item.projectLabel} • Run {item.runId}
+                </p>
+                <p className="text-[11px] text-gray-500 truncate" title={`${item.timestampLabel} • ${item.runtimeText}`}>
+                  {item.timestampLabel} • {item.runtimeText}
+                </p>
+                <div className="flex items-center gap-1 pt-1">
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-accent flex-1"
+                    onClick={() => handleLoadRun(item)}
+                  >
+                    Load Run
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-outline"
+                    onClick={() => openRunDetails(item)}
+                  >
+                    Details
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {selectedMedia && (
+        <div
+          className="fixed inset-0 z-[1000] bg-black/80 p-3 sm:p-6 flex items-center justify-center"
+          onClick={() => setSelectedMedia(null)}
+        >
+          <div
+            className="bg-base-200 rounded-lg shadow-2xl w-full max-w-5xl max-h-[92vh] overflow-hidden flex flex-col"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="p-3 border-b border-base-300 flex flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-white font-semibold truncate" title={selectedMedia.filename}>
+                  {selectedMedia.filename}
+                </p>
+                <p className="text-xs text-gray-400">
+                  {selectedMedia.projectLabel} • Run {selectedMedia.runId} • {selectedMedia.timestampLabel}
+                </p>
+              </div>
+              <button type="button" className="btn btn-sm btn-outline" onClick={() => setSelectedMedia(null)}>
+                Close
+              </button>
+            </div>
+            <div className="p-3 overflow-auto flex-1 flex items-center justify-center bg-base-300/40">
+              {selectedMedia.mediaType === 'video' && (
+                <video src={selectedMedia.fullUrl} controls autoPlay className="max-h-[72vh] max-w-full object-contain rounded-md" />
+              )}
+              {selectedMedia.mediaType === 'audio' && (
+                <div className="w-full max-w-xl space-y-3">
+                  <p className="text-sm text-gray-300">Audio preview</p>
+                  <audio src={selectedMedia.fullUrl} controls className="w-full" />
+                </div>
+              )}
+              {selectedMedia.mediaType !== 'video' && selectedMedia.mediaType !== 'audio' && (
+                <img src={selectedMedia.fullUrl} alt={selectedMedia.filename} className="max-h-[72vh] max-w-full object-contain rounded-md" />
+              )}
+            </div>
+            <div className="p-3 border-t border-base-300 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-sm btn-accent"
+                onClick={() => handleLoadRun(selectedMedia)}
+              >
+                Load Run
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-outline"
+                onClick={() => openRunDetails(selectedMedia)}
+              >
+                Run Details
+              </button>
+              <a
+                href={selectedMedia.fullUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-sm btn-outline"
+              >
+                Open File
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default Gallery;
