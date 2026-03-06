@@ -12,6 +12,7 @@ import {
   getActiveProjectContext,
   PROJECTS_STATE_KEY,
   readJsonStorage,
+  writeJsonStorage,
   getProjectWorkflowDefaults,
   setActiveProjectContext,
   upsertProjectWorkflowDefaults,
@@ -144,6 +145,7 @@ const GGUFLOADERKJ_ATTENTION_OVERRIDES = ["none", "sdpa", "sageattn", "xformers"
 const GGUFLOADERKJ_MODEL_NODE_TYPES = ['CozyGenGGUFLoaderKJModelSelector'];
 const HISTORY_SELECTION_KEY = 'historySelection';
 const PRESET_STORAGE_KEY = 'cozygenWorkflowPresetsV1';
+const GENERATE_DRAFTS_STORAGE_KEY = 'cozygenGenerateDraftsV1';
 const RUN_START_STORAGE_PREFIX = 'cozygenRunStartMs:';
 const FALLBACK_PROJECT_ID = 'project-1';
 const FALLBACK_PROJECT_NAME = 'Project 1';
@@ -346,6 +348,34 @@ const getCurrentProjectContext = () => {
 };
 
 const getRunStartStorageKey = (promptId) => `${RUN_START_STORAGE_PREFIX}${String(promptId || '')}`;
+const readGenerateDraftsStore = () => (
+  readJsonStorage(GENERATE_DRAFTS_STORAGE_KEY, {})
+);
+const buildGenerateDraftKey = (projectId, workflowName) => (
+  `${String(projectId || '').trim()}::${String(workflowName || '').trim()}`
+);
+const getGenerateDraft = (projectId, workflowName) => {
+  const key = buildGenerateDraftKey(projectId, workflowName);
+  if (!key || key === '::') return null;
+  const store = readGenerateDraftsStore();
+  const value = store?.[key];
+  return value && typeof value === 'object' ? value : null;
+};
+const saveGenerateDraft = (projectId, workflowName, payload) => {
+  const key = buildGenerateDraftKey(projectId, workflowName);
+  if (!key || key === '::' || !payload || typeof payload !== 'object') return;
+  const store = readGenerateDraftsStore();
+  writeJsonStorage(GENERATE_DRAFTS_STORAGE_KEY, {
+    ...store,
+    [key]: {
+      formData: payload.formData && typeof payload.formData === 'object' ? payload.formData : {},
+      randomizeState: payload.randomizeState && typeof payload.randomizeState === 'object' ? payload.randomizeState : {},
+      bypassedState: payload.bypassedState && typeof payload.bypassedState === 'object' ? payload.bypassedState : {},
+      bypassControlsState: payload.bypassControlsState && typeof payload.bypassControlsState === 'object' ? payload.bypassControlsState : {},
+      updated_at: new Date().toISOString(),
+    },
+  });
+};
 const sanitizePreviewUrls = (items) => (
   (Array.isArray(items) ? items : [])
     .map((value) => (typeof value === 'string' ? value.trim() : ''))
@@ -358,13 +388,29 @@ const readStoredPreviewUrls = () => {
     return [];
   }
 };
+const readWorkflowStateFromStorage = (workflowName, suffix, fallbackValue = {}) => {
+  const key = `${String(workflowName || '').trim()}_${suffix}`;
+  if (!key || key === `_${suffix}`) return fallbackValue;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallbackValue;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : fallbackValue;
+  } catch {
+    return fallbackValue;
+  }
+};
 
 function App() {
   const navigate = useNavigate();
   const initialActiveContext = getActiveProjectContext();
+  const initialStoredWorkflow = localStorage.getItem('selectedWorkflow');
+  const normalizedStoredWorkflow = initialStoredWorkflow && initialStoredWorkflow !== 'null'
+    ? initialStoredWorkflow
+    : null;
   const [workflows, setWorkflows] = useState([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState(() => (
-    String(initialActiveContext?.defaultWorkflow || '').trim() || localStorage.getItem('selectedWorkflow') || null
+    String(initialActiveContext?.defaultWorkflow || '').trim() || normalizedStoredWorkflow || null
   ));
   const [workflowData, setWorkflowData] = useState(null);
   const [dynamicInputs, setDynamicInputs] = useState([]);
@@ -801,6 +847,62 @@ function App() {
       updated_at: new Date().toISOString(),
     });
   }, []);
+
+  const persistWorkflowStateForRefresh = useCallback((workflowName, nextState = {}) => {
+    const workflow = String(workflowName || '').trim();
+    if (!workflow) return;
+    const safeFormData = nextState.formData && typeof nextState.formData === 'object' ? nextState.formData : {};
+    const safeRandomize = nextState.randomizeState && typeof nextState.randomizeState === 'object' ? nextState.randomizeState : {};
+    const safeBypassed = nextState.bypassedState && typeof nextState.bypassedState === 'object' ? nextState.bypassedState : {};
+    const safeBypassControls = nextState.bypassControlsState && typeof nextState.bypassControlsState === 'object' ? nextState.bypassControlsState : {};
+    localStorage.setItem(`${workflow}_formData`, JSON.stringify(safeFormData));
+    localStorage.setItem(`${workflow}_randomizeState`, JSON.stringify(safeRandomize));
+    localStorage.setItem(`${workflow}_bypassedState`, JSON.stringify(safeBypassed));
+    localStorage.setItem(getBypassControlStateStorageKey(workflow), JSON.stringify(safeBypassControls));
+    persistProjectDefaults(workflow, {
+      formData: safeFormData,
+      randomizeState: safeRandomize,
+      bypassedState: safeBypassed,
+      bypassControlsState: safeBypassControls,
+    });
+    const projectContext = getCurrentProjectContext();
+    saveGenerateDraft(projectContext.projectId, workflow, {
+      formData: safeFormData,
+      randomizeState: safeRandomize,
+      bypassedState: safeBypassed,
+      bypassControlsState: safeBypassControls,
+    });
+  }, [persistProjectDefaults]);
+
+  const resetWorkflowToDefaults = useCallback(async (workflowName, options = {}) => {
+    const workflow = String(workflowName || '').trim();
+    if (!workflow) return false;
+    const shouldConfirm = options.confirm !== false;
+    if (shouldConfirm) {
+      const proceed = window.confirm(
+        `Reset "${workflow}" to workflow defaults?\n\nThis will replace your current values for this workflow.`
+      );
+      if (!proceed) {
+        return false;
+      }
+    }
+
+    try {
+      const data = await getWorkflow(workflow);
+      const prepared = await prepareWorkflowData(data, {}, {}, {}, {});
+      persistWorkflowStateForRefresh(workflow, {
+        formData: prepared?.initialFormData || {},
+        randomizeState: prepared?.filteredRandomizeState || {},
+        bypassedState: prepared?.filteredBypassedState || {},
+        bypassControlsState: prepared?.normalizedBypassControlsState || {},
+      });
+      return true;
+    } catch (error) {
+      console.warn(`CozyGen: failed to reset workflow defaults for ${workflow}`, error);
+      window.alert('Failed to reset workflow defaults.');
+      return false;
+    }
+  }, [prepareWorkflowData, persistWorkflowStateForRefresh]);
 
   const applyHistorySelection = useCallback(async (historyItem) => {
     if (!historyItem?.json) return;
@@ -1253,22 +1355,35 @@ function App() {
         const data = await getWorkflow(selectedWorkflow);
         const projectContext = getCurrentProjectContext();
         const projectDefaults = getProjectWorkflowDefaults(projectContext.projectId, selectedWorkflow) || {};
-        const fallbackFormData = JSON.parse(localStorage.getItem(`${selectedWorkflow}_formData`)) || {};
-        const fallbackRandomizeState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_randomizeState`)) || {};
-        const fallbackBypassedState = JSON.parse(localStorage.getItem(`${selectedWorkflow}_bypassedState`)) || {};
+        const generateDraft = getGenerateDraft(projectContext.projectId, selectedWorkflow) || {};
+        const fallbackFormData = readWorkflowStateFromStorage(selectedWorkflow, 'formData', {});
+        const fallbackRandomizeState = readWorkflowStateFromStorage(selectedWorkflow, 'randomizeState', {});
+        const fallbackBypassedState = readWorkflowStateFromStorage(selectedWorkflow, 'bypassedState', {});
         const fallbackBypassControlsState = readBypassControlStateForWorkflow(selectedWorkflow);
+        const draftFormData = generateDraft?.formData && typeof generateDraft.formData === 'object'
+          ? generateDraft.formData
+          : null;
+        const draftRandomizeState = generateDraft?.randomizeState && typeof generateDraft.randomizeState === 'object'
+          ? generateDraft.randomizeState
+          : null;
+        const draftBypassedState = generateDraft?.bypassedState && typeof generateDraft.bypassedState === 'object'
+          ? generateDraft.bypassedState
+          : null;
+        const draftBypassControlsState = generateDraft?.bypassControlsState && typeof generateDraft.bypassControlsState === 'object'
+          ? generateDraft.bypassControlsState
+          : null;
         const savedFormData = projectDefaults?.formData && typeof projectDefaults.formData === 'object'
-          ? projectDefaults.formData
-          : fallbackFormData;
+          ? (draftFormData || projectDefaults.formData)
+          : (draftFormData || fallbackFormData);
         const savedRandomizeState = projectDefaults?.randomizeState && typeof projectDefaults.randomizeState === 'object'
-          ? projectDefaults.randomizeState
-          : fallbackRandomizeState;
+          ? (draftRandomizeState || projectDefaults.randomizeState)
+          : (draftRandomizeState || fallbackRandomizeState);
         const savedBypassedState = projectDefaults?.bypassedState && typeof projectDefaults.bypassedState === 'object'
-          ? projectDefaults.bypassedState
-          : fallbackBypassedState;
+          ? (draftBypassedState || projectDefaults.bypassedState)
+          : (draftBypassedState || fallbackBypassedState);
         const savedBypassControlsState = projectDefaults?.bypassControlsState && typeof projectDefaults.bypassControlsState === 'object'
-          ? projectDefaults.bypassControlsState
-          : fallbackBypassControlsState;
+          ? (draftBypassControlsState || projectDefaults.bypassControlsState)
+          : (draftBypassControlsState || fallbackBypassControlsState);
 
         await prepareWorkflowData(
           data,
@@ -1280,12 +1395,30 @@ function App() {
 
       } catch (error) {
         console.error(error);
-        handleWorkflowSelect(null);
+        handleWorkflowSelect(null, { confirmLoss: false, reselectAsReset: false });
       }
     };
 
     fetchWorkflowData();
   }, [selectedWorkflow, prepareWorkflowData]);
+
+  useEffect(() => {
+    if (!selectedWorkflow || !workflowData) return;
+    const projectContext = getCurrentProjectContext();
+    saveGenerateDraft(projectContext.projectId, selectedWorkflow, {
+      formData,
+      randomizeState,
+      bypassedState,
+      bypassControlsState,
+    });
+  }, [
+    selectedWorkflow,
+    workflowData,
+    formData,
+    randomizeState,
+    bypassedState,
+    bypassControlsState,
+  ]);
 
   useEffect(() => {
     const storedHistory = localStorage.getItem(HISTORY_SELECTION_KEY);
@@ -1302,15 +1435,37 @@ function App() {
   }, [applyHistorySelection]);
 
   // --- Handlers ---
-  const handleWorkflowSelect = (workflow) => {
-    setSelectedWorkflow(workflow);
-    localStorage.setItem('selectedWorkflow', workflow);
+  const handleWorkflowSelect = async (workflow, options = {}) => {
+    const nextWorkflow = String(workflow || '').trim() || null;
+    const currentWorkflow = String(selectedWorkflow || '').trim() || null;
+    const confirmLoss = options.confirmLoss !== false;
+    const reselectAsReset = options.reselectAsReset !== false;
+
+    if (nextWorkflow && currentWorkflow && nextWorkflow === currentWorkflow && reselectAsReset) {
+      await resetWorkflowToDefaults(nextWorkflow, { confirm: true });
+      return;
+    }
+
+    if (confirmLoss && workflowData && currentWorkflow && nextWorkflow !== currentWorkflow) {
+      const proceed = window.confirm(
+        `Switch workflow from "${currentWorkflow}" to "${nextWorkflow || '(none)'}"?\n\nCurrent unsaved visual changes will be replaced by the selected workflow state.`
+      );
+      if (!proceed) return;
+    }
+
+    setSelectedWorkflow(nextWorkflow);
+    if (nextWorkflow) {
+      localStorage.setItem('selectedWorkflow', nextWorkflow);
+    } else {
+      localStorage.removeItem('selectedWorkflow');
+    }
     setWorkflowData(null);
     setDynamicInputs([]);
     setBypassControls([]);
     setCollapsedInputNodes({});
     setFormData({});
     setRandomizeState({});
+    setBypassedState({});
     setBypassControlsState({});
     setPreviewImages([]);
     videoPreviewEntriesRef.current = {};
@@ -1990,6 +2145,16 @@ function App() {
                   selectedWorkflow={selectedWorkflow}
                   onSelect={handleWorkflowSelect}
                 />
+                <div className="bg-base-200 shadow-lg rounded-lg p-3">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline w-full"
+                      disabled={!selectedWorkflow || !workflowData}
+                      onClick={() => resetWorkflowToDefaults(selectedWorkflow, { confirm: true })}
+                    >
+                      Reset To Workflow Defaults
+                    </button>
+                </div>
                 <div className="bg-base-200 shadow-lg rounded-lg p-3 space-y-3">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                         <h2 className="text-lg font-semibold text-white">Presets</h2>

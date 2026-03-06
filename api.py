@@ -502,6 +502,48 @@ async def get_media_file(request: web.Request) -> web.Response:
         headers={"Cache-Control": "public, max-age=3600"},
     )
 
+async def get_media_meta_batch(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    if not isinstance(payload, dict):
+        return web.json_response({"error": "Invalid media metadata payload"}, status=400)
+
+    raw_items = payload.get("items", [])
+    if not isinstance(raw_items, list):
+        return web.json_response({"error": "Invalid media metadata items"}, status=400)
+
+    items_out = {}
+    for raw in raw_items[:500]:
+        if not isinstance(raw, dict):
+            continue
+        filename = str(raw.get("filename", "")).strip()
+        subfolder = str(raw.get("subfolder", "")).strip()
+        file_type = str(raw.get("type", "output")).strip() or "output"
+        if not filename:
+            continue
+
+        key = f"{file_type}::{subfolder}::{filename}"
+        base_dir = get_base_dir_for_type(file_type)
+        file_path = normalize_media_path(base_dir, subfolder, filename)
+        if not file_path or not os.path.exists(file_path) or not os.path.isfile(file_path):
+            items_out[key] = None
+            continue
+
+        try:
+            stat = os.stat(file_path)
+            mtime_ms = int(stat.st_mtime * 1000)
+            items_out[key] = {
+                "modified_ms": mtime_ms,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+            }
+        except Exception:
+            items_out[key] = None
+
+    return web.json_response({"items": items_out})
+
 async def get_history_list(request: web.Request) -> web.Response:
     items = list_history_entries()
     return web.json_response({"items": items})
@@ -827,6 +869,7 @@ routes = [
     web.post('/cozygen/logs/clear', clear_logs),
     web.get('/cozygen/gallery', get_gallery_files),
     web.get('/cozygen/media', get_media_file),
+    web.post('/cozygen/media_meta_batch', get_media_meta_batch),
     web.get('/cozygen/thumb', get_thumbnail),
     web.get('/cozygen/history', get_history_list),
     web.get('/cozygen/history/{history_id}', get_history_item),

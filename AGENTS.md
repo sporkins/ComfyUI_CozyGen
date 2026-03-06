@@ -52,6 +52,11 @@
 - Never treat non-empty `preview_images` arrays as valid without sanitizing entries. Always filter to non-empty URL strings before deciding to skip backfill because `[null]` can block recovery and hide media.
 - Never rely on ComfyUI `/history` fallback for restart durability. Always persist `preview_images` before run end completes (or backfill from `/history` immediately) because ComfyUI history may be unavailable after restart.
 - Never let `session` hydration overwrite an already-selected active project context. Always preserve explicit project selection and only use session project data as a fallback because stale session metadata can mislabel new runs.
+- Never restore Generate state from workflow/project defaults before checking the last saved project+workflow draft. Always prioritize the latest draft on page load because refresh should preserve in-progress edits.
+- Never make workflow switching destructive without explicit confirmation and a reset path. Always provide a clear confirm dialog and a one-click reset-to-defaults action because accidental switches can wipe active edits.
+- Never display run-level timestamps as if they were per-media timestamps in gallery views. Always resolve per-file modified times when available because outputs within one run can complete minutes apart.
+- Never let `LoraMulti` UI expose workflow-configured empty slots as active selections by default. Always compact trailing `None` entries to a single visible row and keep `num_loras` aligned because empty placeholder slots create noisy, misleading controls.
+- Never keep multiline textareas at fixed heights in mobile-heavy forms. Always auto-size to content on load and input because hidden text forces extra scrolling and slows editing.
 - Never test or debug using the live CozyGen cache directory or running CozyGen instance data. Always ask the user to export/share sanitized debug data into this project first because cache/runtime data may contain sensitive content.
 - Never replace an existing configurable node when a simpler variant is requested. Always add a separate minimal node to avoid workflow regressions.
 - Never increase numeric UI precision without updating backend rounding/serialization too. Always keep them aligned because hidden truncation causes confusing value changes.

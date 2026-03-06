@@ -5,47 +5,86 @@ const LoraMultiInput = ({ value, onChange, choices }) => {
   const MAX_LORAS = 5;
   const EMPTY_LORA = { lora: 'None', strength: 0 };
   const values = Array.isArray(value) ? value : [];
-  const normalizeCount = (count) => Math.max(1, Math.min(MAX_LORAS, Number.parseInt(count, 10) || MAX_LORAS));
+  const normalizeCount = (count) => Math.max(1, Math.min(MAX_LORAS, Number.parseInt(count, 10) || 1));
+  const normalizeLoraName = (rawValue) => String(rawValue ?? 'None').trim();
+  const isNoneLora = (rawValue) => {
+    const normalized = normalizeLoraName(rawValue);
+    return normalized === '' || normalized.toLowerCase() === 'none';
+  };
+  const getChoiceValue = (choice) => (
+    choice && typeof choice === 'object' && Object.prototype.hasOwnProperty.call(choice, 'value')
+      ? choice.value
+      : choice
+  );
+  const getFirstSelectableLora = () => {
+    if (!Array.isArray(choices)) return null;
+    for (const choice of choices) {
+      const choiceValue = getChoiceValue(choice);
+      if (!isNoneLora(choiceValue)) {
+        return String(choiceValue);
+      }
+    }
+    return null;
+  };
+
   const inferCount = () => {
     let highest = 0;
     for (let index = 0; index < MAX_LORAS; index += 1) {
       const lora = values[index]?.lora ?? 'None';
-      const strength = Number(values[index]?.strength ?? 0);
-      if (lora !== 'None' && strength !== 0) {
+      if (!isNoneLora(lora)) {
         highest = index + 1;
       }
     }
-    return highest > 0 ? highest : MAX_LORAS;
+    return highest > 0 ? highest : 1;
   };
 
-  const activeCount = normalizeCount(values.num_loras ?? inferCount());
+  const activeCount = inferCount();
   const loraDefaults = Array.from({ length: MAX_LORAS }, (_, index) => ({
-    lora: values[index]?.lora ?? 'None',
-    strength: values[index]?.strength ?? 1.0,
+    lora: normalizeLoraName(values[index]?.lora ?? 'None') || 'None',
+    strength: Number(values[index]?.strength ?? (isNoneLora(values[index]?.lora ?? 'None') ? 0 : 1.0)),
   }));
 
-  const emitValues = (nextValues, nextCount = activeCount) => {
+  const emitValues = (nextValues) => {
     const normalized = Array.from({ length: MAX_LORAS }, (_, index) => ({
       lora: nextValues[index]?.lora ?? EMPTY_LORA.lora,
-      strength: nextValues[index]?.strength ?? (index < nextCount ? 1.0 : EMPTY_LORA.strength),
+      strength: Number(nextValues[index]?.strength ?? (isNoneLora(nextValues[index]?.lora) ? EMPTY_LORA.strength : 1.0)),
     }));
-    for (let index = nextCount; index < MAX_LORAS; index += 1) {
+
+    let compactedCount = 1;
+    for (let index = 0; index < MAX_LORAS; index += 1) {
+      if (!isNoneLora(normalized[index]?.lora)) {
+        compactedCount = index + 1;
+      }
+    }
+
+    for (let index = compactedCount; index < MAX_LORAS; index += 1) {
       normalized[index] = { ...EMPTY_LORA };
     }
-    normalized.num_loras = Math.max(1, Math.min(MAX_LORAS, nextCount));
+    normalized.num_loras = compactedCount;
     onChange(normalized);
   };
 
   const handleChange = (index, nextValue) => {
     const nextValues = [...loraDefaults];
     nextValues[index] = nextValue;
-    emitValues(nextValues, activeCount);
+    emitValues(nextValues);
   };
 
   const handleCountChange = (nextCountValue) => {
     const nextCount = normalizeCount(nextCountValue);
+    if (nextCount <= activeCount) {
+      const nextValues = [...loraDefaults];
+      emitValues(nextValues.slice(0, nextCount));
+      return;
+    }
+
+    const firstSelectableLora = getFirstSelectableLora();
+    if (!firstSelectableLora) return;
     const nextValues = [...loraDefaults];
-    emitValues(nextValues, nextCount);
+    for (let index = activeCount; index < nextCount; index += 1) {
+      nextValues[index] = { lora: firstSelectableLora, strength: 1.0 };
+    }
+    emitValues(nextValues);
   };
 
   const handleCountStep = (delta) => {

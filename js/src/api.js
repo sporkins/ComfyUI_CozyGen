@@ -272,6 +272,20 @@ export const getCozyMediaUrl = (filename, subfolder = '', type = 'output', optio
   return `${baseUrl}/cozygen/media?${params.toString()}`;
 };
 
+export const getCozyMediaMetaBatch = async (items) => {
+  const response = await fetch(`${BASE_URL}/media_meta_batch`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ items: Array.isArray(items) ? items : [] }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch CozyGen media metadata');
+  }
+  return response.json();
+};
+
 export const getThumbUrl = (filename, subfolder = '', type = 'output', options = {}) => {
   const baseUrl = window.location.protocol + '//' + window.location.host;
   const params = new URLSearchParams({

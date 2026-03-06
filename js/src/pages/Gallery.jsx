@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   getCozyHistoryList,
   getCozyMediaUrl,
+  getCozyMediaMetaBatch,
   getHistory,
   getThumbUrl,
   parseMediaRefFromUrl,
@@ -199,6 +200,7 @@ const Gallery = () => {
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [loadingOutputs, setLoadingOutputs] = useState(false);
   const [outputProgress, setOutputProgress] = useState({ loaded: 0, total: 0 });
+  const [mediaMetaByKey, setMediaMetaByKey] = useState({});
   const [errorText, setErrorText] = useState('');
   const [projectFilter, setProjectFilter] = useState(PROJECT_FILTER_ALL);
   const [typeFilter, setTypeFilter] = useState(TYPE_FILTER_ALL);
@@ -308,6 +310,8 @@ const Gallery = () => {
         projectLabel: projectMeta.projectLabel,
         projectFilterKey: projectMeta.projectFilterKey,
         mediaType: media.mediaType,
+        storageType: media.type || 'output',
+        mediaStorageKey: `${media.type || 'output'}::${media.subfolder || ''}::${media.filename || ''}`,
         sequenceIndex: media.sequenceIndex,
         isFinalForType: media.isFinalForType,
         filename: media.filename,
@@ -318,6 +322,46 @@ const Gallery = () => {
       }));
     });
   }, [historyItems, historyOutputs, savedProjectNames]);
+
+  useEffect(() => {
+    if (mediaItems.length === 0) return;
+    const refsByKey = new Map();
+    mediaItems.forEach((item) => {
+      if (!item?.filename) return;
+      if (refsByKey.has(item.mediaStorageKey)) return;
+      refsByKey.set(item.mediaStorageKey, {
+        filename: item.filename,
+        subfolder: item.subfolder || '',
+        type: item.storageType || 'output',
+      });
+    });
+    const missingRefs = [...refsByKey.entries()]
+      .filter(([key]) => !Object.prototype.hasOwnProperty.call(mediaMetaByKey, key))
+      .map(([, ref]) => ref);
+    if (missingRefs.length === 0) return;
+
+    let cancelled = false;
+    const loadMediaMeta = async () => {
+      const chunkSize = 200;
+      for (let offset = 0; offset < missingRefs.length; offset += chunkSize) {
+        if (cancelled) return;
+        const chunk = missingRefs.slice(offset, offset + chunkSize);
+        try {
+          const data = await getCozyMediaMetaBatch(chunk);
+          if (cancelled) return;
+          const next = data?.items && typeof data.items === 'object' ? data.items : {};
+          if (Object.keys(next).length > 0) {
+            setMediaMetaByKey((prev) => ({ ...prev, ...next }));
+          }
+        } catch {
+          if (cancelled) return;
+        }
+      }
+    };
+
+    loadMediaMeta();
+    return () => { cancelled = true; };
+  }, [mediaItems, mediaMetaByKey]);
 
   const projectFilterOptions = useMemo(() => {
     const optionsByKey = new Map();
@@ -355,7 +399,11 @@ const Gallery = () => {
     });
 
     filtered.sort((a, b) => {
-      const tsDiff = a.runTimestampMs - b.runTimestampMs;
+      const aMediaMs = Number(mediaMetaByKey?.[a.mediaStorageKey]?.modified_ms || 0);
+      const bMediaMs = Number(mediaMetaByKey?.[b.mediaStorageKey]?.modified_ms || 0);
+      const aTs = aMediaMs > 0 ? aMediaMs : a.runTimestampMs;
+      const bTs = bMediaMs > 0 ? bMediaMs : b.runTimestampMs;
+      const tsDiff = aTs - bTs;
       if (tsDiff !== 0) {
         return sortOrder === SORT_DATE_DESC ? -tsDiff : tsDiff;
       }
@@ -368,12 +416,17 @@ const Gallery = () => {
     });
 
     return filtered;
-  }, [favoritesOnly, finalOnly, mediaItems, projectFilter, searchText, sortOrder, typeFilter]);
+  }, [favoritesOnly, finalOnly, mediaItems, mediaMetaByKey, projectFilter, searchText, sortOrder, typeFilter]);
 
   const visibleRunCount = useMemo(
     () => new Set(visibleItems.map((item) => item.runId)).size,
     [visibleItems]
   );
+  const getDisplayTimestamp = (item) => {
+    const mediaMs = Number(mediaMetaByKey?.[item?.mediaStorageKey]?.modified_ms || 0);
+    const tsMs = mediaMs > 0 ? mediaMs : Number(item?.runTimestampMs || 0);
+    return formatTimestamp(tsMs);
+  };
 
   const handleLoadRun = (item) => {
     if (!item?.run?.json) {
@@ -526,8 +579,8 @@ const Gallery = () => {
                 <p className="text-[11px] text-gray-400 truncate" title={item.projectLabel}>
                   {item.projectLabel} • Run {item.runId}
                 </p>
-                <p className="text-[11px] text-gray-500 truncate" title={`${item.timestampLabel} • ${item.runtimeText}`}>
-                  {item.timestampLabel} • {item.runtimeText}
+                <p className="text-[11px] text-gray-500 truncate" title={`${getDisplayTimestamp(item)} • ${item.runtimeText}`}>
+                  {getDisplayTimestamp(item)} • {item.runtimeText}
                 </p>
                 <div className="flex items-center gap-1 pt-1">
                   <button
@@ -566,7 +619,7 @@ const Gallery = () => {
                   {selectedMedia.filename}
                 </p>
                 <p className="text-xs text-gray-400">
-                  {selectedMedia.projectLabel} • Run {selectedMedia.runId} • {selectedMedia.timestampLabel}
+                  {selectedMedia.projectLabel} • Run {selectedMedia.runId} • {getDisplayTimestamp(selectedMedia)}
                 </p>
               </div>
               <button type="button" className="btn btn-sm btn-outline" onClick={() => setSelectedMedia(null)}>
